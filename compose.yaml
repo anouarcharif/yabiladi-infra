@@ -1,0 +1,1075 @@
+name: yabiladi-infra
+
+# ============================================================================
+# Infrastructure commune de la pile Yabiladi.
+#
+# Ce dépôt ne contient AUCUNE application : il tient les quatre services que
+# tous les projets partagent — le proxy inverse (Traefik), le relais SMTP
+# sortant (Postfix), la brique de géolocalisation (geoipupdate), la console de
+# sauvegarde (DBackup) — et les deux piles de mesure qui ne quittent jamais
+# l'hôte (Loki/Alloy/Grafana d'un côté, Prometheus/node_exporter/cAdvisor de
+# l'autre).
+#
+# Déploiement : « ./deploy.sh » ici, puis « ./deploy.sh » dans chaque projet.
+# Aucun deploy.sh n'en pilote un autre (règle de la pile) : celui-ci s'arrête
+# aux conteneurs qu'il déclare, ne fait ni « git pull » ni « cache:clear » d'un
+# dépôt voisin, et ne contrôle aucune URL de site. Les projets, eux, supposent
+# ce dépôt déjà déployé — ils ne déclarent leurs réseaux que comme « external ».
+#
+# Trois objets vivent ici et nulle part ailleurs :
+#   - le coffre SOPS (deploy/secrets/, deploy/secrets.sh, deploy/secrets.manifest) :
+#     une seule table de correspondance pour toute la pile, filtrée par la
+#     colonne « project » lors de la matérialisation ;
+#   - les réseaux yabiladi_app et yabiladi_logging, créés par « up -d » ici ;
+#   - l'image yabiladi/secrets:1 (docker/secrets/Dockerfile), construite par ce
+#     dépôt et réutilisée telle quelle par les deploy.sh des projets.
+#
+# Ce qui reste au site (Yabiladi-V2-Symfony) : l'image yabiladi/php:8.4-fpm
+# (docker/php/Dockerfile), Dagu et ses DAGs, les antennes radio, nginx et php.
+# Facturation et médiakit se suffisent à eux-mêmes et ne référencent que
+# l'image php produite par le site.
+#
+# Noms physiques préservés : chaque volume qui déménage porte une clé « name: »
+# explicite (yabiladi_<nom>) et chaque réseau idem. Un « git mv » de dépôt ne
+# donc jamais demander une recopie de données — Compose retrouverait le volume
+# créé par l'ancien projet. Sans cette clé, un projet nommé « yabiladi-infra »
+# aurait créé yabiladi-infra_traefik_acme à côté de l'original, et le magasin
+# ACME (les certificats en cours) serait reparti de zéro.
+#
+# Les chemins « ./docker/… » et « ./tools/… » de ce fichier supposent les
+# déménagements faits par « git mv » depuis le site : docker/{traefik,alloy,loki,
+# grafana,prometheus,postfix,secrets,dbackup} et tools/{backup,logging}. Les
+# montages qui désignent une donnée du site (médias, images de l'éditeur,
+# journaux Symfony) passent par ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony} : la
+# machine n'a rien à reconfigurer tant que les dépôts restent frères, et une
+# arborescence différente se déclare dans .env.local (publié au shell par
+# deploy.sh avant l'appel à Compose).
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# Antennes communes aux conteneurs de l'infrastructure
+# ---------------------------------------------------------------------------
+
+# Secret de la console de sauvegarde, posé par le coffre comme credentials.env :
+# ces clés-là ne sont lues par aucun Dotenv de Symfony, seulement par l'image
+# DBackup, qui ne connaît que l'environnement du conteneur.
+#
+# « required: false » reprend le réglage de credentials.env — un fichier absent
+# ne doit pas casser « docker compose ps » pour le reste de la pile, qu'un autre
+# chantier tient parfois. Le garde-fou n'est pas là, il est dans deploy.sh (qui
+# meurt avant « up -d ») et dans la garde « variables minimales » du coffre :
+# laisser DBackup démarrer sans ces valeurs serait pire qu'un échec, le conteneur
+# s'invente alors un ENCRYPTION_KEY et un BETTER_AUTH_SECRET différents à chaque
+# création, ce qui vide ses sessions et rend illisibles les identifiants déjà
+# chiffrés dans son coffre interne.
+# Secret de la console de sauvegarde, posé par le coffre comme credentials.env :
+# ces clés-là ne sont lues par aucun Dotenv de Symfony, seulement par l'image
+# DBackup, qui ne connaît que l'environnement du conteneur.
+#
+# « required: false » reprend le réglage de credentials.env — un fichier absent
+# ne doit pas casser « docker compose ps » pour le reste de la pile, qu'un autre
+# chantier tient parfois. Le garde-fou n'est pas là, il est dans deploy.sh (qui
+# meurt avant « up -d ») et dans la garde « variables minimales » du coffre :
+# laisser DBackup démarrer sans ces valeurs serait pire qu'un échec, le conteneur
+# s'invente alors un ENCRYPTION_KEY et un BETTER_AUTH_SECRET différents à chaque
+# création, ce qui vide ses sessions et rend illisibles les identifiants déjà
+# chiffrés dans son coffre interne.
+x-dbackup-secrets: &dbackup-secrets
+  - path: docker/legacy/dbackup.env
+    required: false
+
+# Rotation des fichiers de logs Docker créés par le driver json-file. Ces lignes
+# ne s'appliquent qu'aux conteneurs déclarés ici : un conteneur déjà créé garde
+# la configuration de sa création (Docker ne reconfigure pas l'existant) et la
+# changer dans ce fichier imposerait de le recréer — d'où le script
+# tools/logging/docker-log-rotation.sh, qui traite la valeur par défaut de
+# l'hôte séparément et sans redémarrer le démon.
+# Sans plafond, le json-file d'un conteneur bavard (Nginx sous charge) grossit
+# jusqu'à saturer le disque : 3 fichiers de 10 Mo = 30 Mo par conteneur au plus.
+# A ne pas confondre : cette rotation borne les fichiers LOCAUX de Docker, la
+# rétention de 30 jours des logs centralisés se joue dans Loki
+# (docker/loki/config.yaml). L'une ne remplace pas l'autre.
+# Rotation des fichiers de logs Docker créés par le driver json-file. Ces lignes
+# ne s'appliquent qu'aux conteneurs déclarés ici : un conteneur déjà créé garde
+# la configuration de sa création (Docker ne reconfigure pas l'existant) et la
+# changer dans ce fichier imposerait de le recréer — d'où le script
+# tools/logging/docker-log-rotation.sh, qui traite la valeur par défaut de
+# l'hôte séparément et sans redémarrer le démon.
+# Sans plafond, le json-file d'un conteneur bavard (Nginx sous charge) grossit
+# jusqu'à saturer le disque : 3 fichiers de 10 Mo = 30 Mo par conteneur au plus.
+# A ne pas confondre : cette rotation borne les fichiers LOCAUX de Docker, la
+# rétention de 30 jours des logs centralisés se joue dans Loki
+# (docker/loki/config.yaml). L'une ne remplace pas l'autre.
+x-docker-logs: &docker-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Géolocalisation et proxy : les deux services que les projets regardent sans
+  # jamais les déclarer chez eux.
+  # ---------------------------------------------------------------------------
+  # Base de géolocalisation lue par le DAG radio-stats. Le pays d'un auditeur
+  # était résolu par l'extension PECL geoip et sa GeoIP.dat : la première ne
+  # compile plus en PHP 8.4, la seconde n'est plus distribuée. GeoLite2 a repris
+  # le flambeau, mais MaxMind en interdit la redistribution — le fichier doit
+  # donc être téléchargé chez l'auteur avec un compte gratuit.
+  #
+  # GEOIPUPDATE_ACCOUNT_ID et GEOIPUPDATE_LICENSE_KEY viennent de
+  # docker/legacy/credentials.env, jamais d'« environment » : l'interpolation
+  # ${…} les graverait dans .env, qui est versionné. L'image lit elle-même ces
+  # variables, rien n'est donc à déclarer ici.
+  #
+  # Le fichier, lui, a bougé avec la séparation des dépôts : « credentials.env »
+  # est scellé dans le coffre sous le projet « site » (deploy/secrets.manifest) et
+  # matérialisé à la racine du dépôt du site. Les deux emplacements sont déclarés
+  # — celui de l'infrastructure d'abord, celui du site ensuite, qui l'emporte en
+  # cas de doublon — et « required: false » garde la règle héritée : un fichier
+  # absent ne doit pas casser « docker compose ps » de l'infrastructure, que l'on
+  # relance parfois pour Loki seul. Le conteneur, lui, échoue à la première
+  # tentative de téléchargement et le dit dans « docker ps » : comportement voulu
+  # ci-dessus, la base pays se contrôle par les statistiques radio.
+  #
+  # GEOIPUPDATE_FREQUENCY (en heures) fait tourner l'image en boucle : à 0 ou
+  # absent, elle ne fait qu'un passage puis quitte, et « restart: unless-stopped »
+  # la relancerait sans répit. Une semaine : les bases publiques MaxMind sont
+  # recalculées le mardi. Tant que les identifiants manquent, le conteneur échoue
+  # immédiatement et « docker ps » l'affiche en boucle de redémarrage avec
+  # l'erreur en clair — c'est voulu : le parseur, lui, s'arrête si la base manque,
+  # donc une absence de base se lit dans les statistiques, pas ailleurs.
+  geoipupdate:
+    image: ghcr.io/maxmind/geoipupdate:v8
+    logging: *docker-logs
+    env_file:
+      - path: docker/legacy/credentials.env
+        required: false
+      - path: ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/docker/legacy/credentials.env
+        required: false
+    environment:
+      # Une seule édition : le code pays suffit aux compteurs d'audience, et
+      # GeoLite2-City pèse dix fois plus lourd pour des villes jamais lues.
+      GEOIPUPDATE_EDITION_IDS: ${GEOIPUPDATE_EDITION_IDS:-GeoLite2-Country}
+      GEOIPUPDATE_FREQUENCY: "${GEOIPUPDATE_FREQUENCY:-168}"
+    volumes:
+      # GEOIPUPDATE_DB_DIR, le répertoire de dépôt, vaut /usr/share/GeoIP dans
+      # l'image : c'est le point de montage, et il doit rester insécable pour
+      # que le montage en lecture seule du DAG fonctionne.
+      - geoip_data:/usr/share/GeoIP
+    healthcheck:
+      # L'image définissait sa propre sonde, qui ne regarde que la présence du
+      # processus : le conteneur est resté « healthy » pendant que geoipupdate
+      # échouait en 401 et s'endormait pour 168 heures. La sonde vérifie donc ce
+      # que les consommateurs lisent vraiment — le fichier lui-même : présent,
+      # d'une taille plausible, et récent.
+      #
+      # Le plancher d'un mégaoctet attrape le téléchargement coupé ou le fichier
+      # partiel (l'édition réelle pèse 3,4 Mo) ; c'est le seul contrôle
+      # d'intégrité possible ici, BusyBox n'ayant pas de `grep -a` et donc pas de
+      # vérification fiable du format mmdb.
+      #
+      # Quatorze jours et non sept : GeoLite2 est reconstruite deux fois par
+      # semaine et FREQUENCY vaut 168 heures, donc une semaine sans fichier neuf
+      # est un retard, deux semaines une panne. Le tampon évite qu'une tentative
+      # manquée isolée — réseau, maintenance, rotation de clé — réveille
+      # l'astreinte. L'âge se lit sur le mtime, que geoipupdate écrit au moment
+      # du dépôt ; il peut accuser quelques minutes de retard sur l'heure du
+      # téléchargement, jamais quelques jours.
+      #
+      # Les `$$` sont l'échappement Compose : sans eux `docker compose`
+      # interpolerait `$f` comme une variable du fichier et la sonde tournerait
+      # à vide, saine et fausse.
+      test:
+        - CMD-SHELL
+        - f=/usr/share/GeoIP/GeoLite2-Country.mmdb; [ -s "$$f" ] && [ "$$(stat -c %s "$$f")" -gt 1000000 ] && [ "$$(stat -c %Y "$$f")" -gt "$$(( $$(date +%s) - 1209600 ))" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Sur une machine neuve, le volume est vide à la création et la première
+      # descente met quelques secondes : sans ce délai, elle serait « unhealthy »
+      # le temps de télécharger.
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - app
+
+  traefik:
+    image: traefik:v3
+    command:
+      - --api.dashboard=true
+      # Pas d'api.insecure : l'entrée 8080 sert le tableau de bord SANS
+      # authentification et sans filtre d'adresse, et tout conteneur du réseau
+      # « app » pouvait l'atteindre en clair. Le seul chemin d'entrée est
+      # désormais le routeur websecure ci-dessous, protégé par le compte Dagu.
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      # Résolveur ACME : tous les routeurs du fichier versionné le référencent,
+      # mais le poste de développement vide leur label « tls.certresolver » dans
+      # compose.override.yaml (non versionné). Rien ne demande donc de certificat
+      # ici — vérifié : aucun échange avec Let's Encrypt au démarrage, et les
+      # mêmes noms sont servis par le certificat auto-signé de dynamic.yml —
+      # tandis que le serveur, qui ne charge pas l'override, émet sa demande au
+      # premier déploiement. L'adresse de contact du serveur (`webmaster@yabiladi.com`)
+      # est versionnée dans `.env` : Let's Encrypt n'avertit qu'elle quand un
+      # renouvellement tourne mal. Quota officiel : 50 certificats par domaine
+      # enregistré et par 7 jours ; la pile en demande 6 (site, rac, dagu, grafana,
+      # dashboard, backups).
+      - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:-}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+      # Le port de boucle qui publiait l'entrée 8080 (api.insecure, donc sans
+      # mot de passe) a disparu avec elle : le tableau de bord se lit sur
+      # https://traefik.yabiladi.com/dashboard/, comme dagu et grafana.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./docker/traefik/certs:/etc/traefik/certs:ro
+      # Fichiers htpasswd lus par les middlewares basicauth (user_yabiladi pour
+      # dagu/grafana/dbackup/dashboard, rac pour le bac à sable). Leur source de
+      # vérité est le coffre : deploy.sh les repose avant « up -d », le dossier
+      # n'a donc plus à être rempli à la main sur une machine neuve. Traefik v3
+      # n'accepte que bcrypt ($2a$, $2b$, $2x$, $2y$), et lit le fichier à la
+      # construction du middleware — d'où le restart conditionnel du déploiement.
+      - ./docker/traefik/htpasswd:/etc/traefik/htpasswd:ro
+      - traefik_acme:/letsencrypt
+    labels:
+      # Tableau de bord Traefik sur son propre nom, derrière le même compte que
+      # Dagu : le fichier htpasswd est partagé, seuls le nom du middleware et la
+      # règle changent (même convention que grafana et la console de sauvegarde).
+      - "traefik.enable=true"
+      # Nom du routeur : `traefik-dashboard`, et non `traefik`, pour ne pas
+      # coller au routeur interne `dashboard@internal` que Traefik déclare
+      # lorsque api.insecure est actif chez une autre machine.
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.yabiladi.com`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      # Comme pour grafana : la vérité du serveur est posée une fois pour toutes
+      # dans le fichier versionné, et le poste de développement vide ce label
+      # dans compose.override.yaml (non versionné) — Traefik retombe alors sur le
+      # certificat auto-signé de dynamic.yml, sans ligne à décommenter au « git
+      # pull » du jour J.
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.middlewares=traefik-ipallow,traefik-htpasswd"
+      # Service interne : le tableau de bord est rendu par Traefik lui-même, il
+      # n'y a donc pas de loadbalancer à déclarer ni de port à pointer.
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      # Liste blanche et compte repris tels quels de Dagu (mêmes variables, même
+      # fichier) : ce qui ouvre l'orchestrateur ouvre le routeur, et un écart
+      # entre les deux se corrigerait deux fois.
+      - "traefik.http.middlewares.traefik-ipallow.ipallowlist.sourceRange=${DAGU_ALLOWED_IPS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+      - "traefik.http.middlewares.traefik-htpasswd.basicauth.usersfile=/etc/traefik/htpasswd/user_yabiladi"
+      - "traefik.http.middlewares.traefik-htpasswd.basicauth.removeheader=true"
+    networks:
+      - app
+    logging: *docker-logs
+
+  # ---------------------------------------------------------------------------
+  # Console de sauvegarde et pile de mesure.
+  # ---------------------------------------------------------------------------
+  # Console de sauvegarde : DBackup archive (TAR), applique une rétention et
+  # lit l'état de ce qui est monté sous /backup, toujours en lecture seule — un
+  # conteneur de backup n'a aucune raison d'écrire dans les données de
+  # production. Les archives sont écrites dans /backups et une restauration dans
+  # /restore, le dossier de travail (voir plus bas pourquoi les deux existent).
+  # Le chiffrement
+  # d'archive n'est pas activé à l'amorçage : la console ne l'expose que comme
+  # action d'interface (mesuré : POST /api/vault/keys répond 405), il se décide
+  # donc à la main, comme le mot de passe restic de l'outil précédent.
+  #
+  # Choix mesuré plutôt que supposé (sonde du 2026-11-01, image v4.0.2) : le
+  # connecteur « docker-volume » de DBackup passe par /var/run/docker.sock, que
+  # le conteneur ne peut pas ouvrir — il refuse explicitement de tourner en root
+  # (« Running as root (PUID/PGID=0) is not supported ») et, en uid 1001, la
+  # socket rend « EACCES ». Les volumes sont donc montés directement, comme ils
+  # l'étaient avec Backrest : mêmes données, même lecture seule, aucun socket.
+  #
+  # L'ordonnanceur est interne au conteneur (journal « Found enabled jobs
+  # count=N » au démarrage) : aucun DAG Dagu n'est nécessaire ici.
+  dbackup:
+    # Version épinglée : « latest » ferait varier le schéma de la base SQLite
+    # et le format des archives sans que personne ne l'ait décidé.
+    image: skyfay/dbackup:v4.0.2
+    hostname: dbackup
+    env_file: *dbackup-secrets
+    environment:
+      # Écoute sur toutes les interfaces du réseau Docker : c'est Traefik qui
+      # expose le service, le port n'est publié en loopback que pour le debug.
+      PORT: "3000"
+      # Traefik termine le TLS : le conteneur sert du HTTP clair sur le réseau
+      # interne. Sans cette ligne, DBackup génère son propre certificat et
+      # s'écoute en 3443 — le routeur resterait donc en 502 silencieux.
+      DISABLE_HTTPS: "true"
+      # Origine que better-auth compare à l'en-tête « Origin » du navigateur.
+      # C'est le nom public derrière Traefik, pas l'hôte local ; la valeur de
+      # production est versionnée et le poste de développement ne change rien,
+      # puisque le même nom sert aussi en local (fichier hosts).
+      BETTER_AUTH_URL: ${DBACKUP_PUBLIC_URL:-https://backups.yabiladi.com}
+      # Les « schedule » des jobs sont dans ce fuseau, comme pour Dagu et les
+      # antennes. Par défaut l'image est en UTC (mesuré : /api/templates répond
+      # "timezone":"UTC" sans TZ), ce qui décalerait les fenêtres d'une heure
+      # d'été par rapport au reste de la pile.
+      TZ: ${DBACKUP_TZ:-Europe/Paris}
+      DATA_DIR: /data
+      # Brouillon des archives avant écriture dans /backups : sur un montage NFS,
+      # tar puis chiffrer puis renommer sur place est coûteux ; le dossier
+      # tampon reste donc dans un volume nommé (voir dbackup_tmp).
+      TMPDIR: /tmp
+      # Accès à la base de production pour le job « Base de données » de la
+      # console, déclaré avec les noms du dépôt (DB_DUMP_*) : mêmes variables,
+      # mêmes sources (.env versionné, .env.local sur la machine) que ce que
+      # lisait le DAG de dump SQL, donc rien à renseigner deux fois sur une
+      # machine. L'amorçage (tools/backup/dbackup-bootstrap.mjs) s'en sert pour
+      # l'adaptateur MariaDB, l'identifiant et la liste des bases.
+      DB_DUMP_HOST: ${DB_DUMP_HOST:-}
+      DB_DUMP_PORT: "${DB_DUMP_PORT:-}"
+      DB_DUMP_USER: ${DB_DUMP_USER:-}
+      DB_DUMP_PASSWORD: ${DB_DUMP_PASSWORD:-}
+      DB_DUMP_DATABASES: ${DB_DUMP_DATABASES:-}
+      # PUID/PGID : la socket docker n'est pas montée (cf. plus haut), PUID reste
+      # donc au défaut de l'image (1001). PGID prend 33 — celui de « www-data »,
+      # l'utilisateur qui écrit les caches et les PDF dans les dossiers sauvegardés
+      # (0640/0750). Sans ce groupe, la console lit ces fichiers en refus et
+      # l'archive du soir est partielle sans le dire autrement ; mesuré sur ce
+      # poste : « REFUSEE en 1001:1001 » avec PGID absent, lecture OK avec.
+      PUID: "1001"
+      PGID: "33"
+    volumes:
+      - dbackup_data:/data
+      - dbackup_tmp:/tmp
+      # Les archives, là où le NFS de sauvegarde est monté. En local, un dossier
+      # du projet (non versionné) ; sur le serveur,
+      # DBACKUP_DEST_HOST_PATH=/data/backup/files dans .env.local — fichier
+      # que deploy.sh publie au shell avant d'appeler Compose, faute de quoi
+      # l'interpolation ne le lit pas (et préparerait un dossier que personne
+      # ne monte). Écritures obligatoires : ne pas ajouter :ro. Le défaut local
+      # est la même valeur que le repli de « prepare_backups » dans deploy.sh :
+      # sinon la machine sans « .env.local » préparerait un dossier que la
+      # console n'écrit pas. Depuis la séparation, « ./ » désigne CE dépôt : le
+      # défaut de poste de travail écrirait donc les archives sous
+      # Yabiladi-Infra/backup/archives. « prepare_backups » refuse la valeur sur
+      # une machine, pour la raison qui l'y obligeait déjà : une archive ne doit
+      # jamais s'installer dans un dépôt d'applications.
+      - ${DBACKUP_DEST_HOST_PATH:-./backup/archives}:/backups
+      # Cible de restauration : la console refuse de restaurer dans un
+      # adaptateur qu'elle ne peut pas écrire — son test crée
+      # « <basePath>/.dbackup/test » — et les sources ci-dessous sont en lecture
+      # seule par conception. Mesuré le 2026-11-02 : restaurer vers « Données de
+      # l'application (lecture seule) » s'arrête sur « Access failed: EACCES:
+      # permission denied, mkdir '/backup/.dbackup' ». Ce dossier-ci est donc le
+      # seul inscriptible côté données, et c'est un atelier : on y restaure pour
+      # inspecter, puis on recopie vers la donnée vive. Petit par défaut ; sur le
+      # serveur, DBACKUP_RESTORE_HOST_PATH peut désigner le disque qui a la place
+      # (une restauration de « media » fait la taille du dossier).
+      - ${DBACKUP_RESTORE_HOST_PATH:-./backup/restore}:/restore
+      # L'outil d'amorçage des jobs (voir tools/backup) : monté, jamais copié
+      # dans une image, pour que « git pull » suffise à le mettre à jour. Le
+      # dossier voyage avec la console, pas avec le site : c'est elle qui appelle
+      # le script, et l'amorçage ne se rejoue que sur une machine neuve.
+      - ./tools/backup:/opt/backup-tools:ro
+      ### sources sauvegardées (lecture seule) ###
+      # Sous « /backup », la racine que déclare l'amorçage (« SOURCE_BASE » de
+      # tools/backup/dbackup-bootstrap.mjs) : depuis le 2026-11-02 chaque montage
+      # a son job, qui le désigne par un nom relatif — « media », « logs », ou
+      # « docker/traefik-acme » pour le volume ACME. Le nom du job, lui, ne prend
+      # jamais de barre oblique : c'est le nom du dossier d'archives sur le dépôt.
+      # Un autre chemin ferait une source introuvable, donc un job « partiel » ou
+      # en échec chaque nuit.
+      # Et jamais sous « /data » : « docker-entrypoint.sh » de l'image fait
+      # « chown -R $PUID:$PGID $DATA_DIR » (DATA_DIR=/data, le volume
+      # dbackup_data) avant de démarrer. Une source montée sous cette racine
+      # entre dans la récursion et le « :ro » la fait échouer — mesuré le
+      # 2026-11-01 : « chown: changing ownership of
+      # '/data/backups/traefik-config/certs/yabiladi.com.key': Read-only file
+      # system », puis « Exited (1) », la console ne démarrait plus.
+      # Médias téléversés par les utilisateurs : la seule donnée que git et les
+      # bases ne contiennent pas (avatars, albums, communiqués, coran, concours).
+      # Chemin croisé : la donnée appartient au site, la console vit ici. Le nom
+      # de destination (« /backup/media ») ne change pas — c'est le nom du job
+      # DBackup et donc celui du dossier d'archives sur le dépôt ; seuls les
+      # montages dbackup passent désormais par SITE_HOST_DIR.
+      - ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/public/files:/backup/media:ro
+      # Images insérées par le gestionnaire de fichiers de l'éditeur (articles,
+      # communiqués, tribunes) : « public/img/assets », avec leurs vignettes dans
+      # « public/img/thumbs ». Depuis la reprise du gestionnaire, la rédaction y
+      # téléverse chaque jour ; le contenu vient aussi de la V1, et il n'existe
+      # ni dans git ni dans les bases.
+      - ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/public/img:/backup/editor-images:ro
+      # Dépôts des applications voisines, montés à leur racine et non sur le
+      # seul sous-dossier sauvegardé. Si l'application n'est pas encore clonée,
+      # Docker ne crée alors qu'un dossier vide : le « git clone » du jour J y
+      # écrit sans buter sur une arborescence pré-créée en root (un montage de
+      # « public/uploads » créerait le dépôt, puis le clone refuserait un
+      # dossier non vide). Les jobs ne lisent que les sous-dossiers de données :
+      # « mediakit/public/img » d'une part, « facturation/public/uploads » et
+      # « facturation/var/bc_files » de l'autre. Les trois sont créés
+      # désactivés (tools/backup/dbackup-bootstrap.mjs) et s'activent à la
+      # bascule de leur application.
+      - ${MEDIAKIT_HOST_DIR:-../Yabiladi-Mediakit-V2}:/backup/mediakit:ro
+      - ${FACTURATION_HOST_DIR:-../Yabiladi-Facturation-V2}:/backup/facturation:ro
+      # Journaux Symfony : seul var/ qui ne se régénère pas. Là encore croisé :
+      # c'est le var/log du site que les projets écrivent, et le job « logs »
+      # n'a rien à savoir du dépôt qui le déclare.
+      - ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/var/log:/backup/logs:ro
+      # Certificats ACME : sans eux, le domaine est en erreur TLS jusqu'au
+      # renouvellement. Volume nommé, monté ici en lecture seule. Le fichier
+      # acme.json est posé par Traefik en 0600 root:root ; deploy.sh le rend
+      # lisible au groupe 33 de la console (voir open_acme_to_backup), sinon le
+      # job le saute chaque nuit en se signalant « partiel ».
+      - traefik_acme:/backup/docker/traefik-acme:ro
+      # Autorité de développement et certificats auto-signés du poste (regénérés
+      # par docker/traefik/generate-cert.sh). Les comptes htpasswd du même
+      # dossier sont écartés par le job : 0600 root:root hors de portée de
+      # l'utilisateur 1001 de la console, et leur source de vérité est le coffre,
+      # qui les redéploie.
+      #
+      # Chemin RESTÉ relatif à ce dépôt, et non à SITE_HOST_DIR : « docker/traefik »
+      # (dynamic.yml, certs/, htpasswd/, generate-cert.sh) est déplacé dans
+      # l'infrastructure par le même mouvement que les services traefik et
+      # dbackup. Le point de montage, « /backup/traefik-config », ne change pas
+      # d'un octet : c'est le nom du job, donc le nom du dossier d'archives sur
+      # le dépôt et la chaîne de rétention attachée. Pointer ici le dépôt du site
+      # archivait un dossier vide après le « git mv », sans le dire — le job se
+      # fut signalé « partiel » chaque nuit. Si une machine garde malgré tout un
+      # « docker/traefik » côté site (déménagement repoussé), la ligne
+      # « ${SITE_HOST_DIR:-…}/docker/traefik:/backup/site-traefik-config:ro »
+      # peut être ajoutée ici sans toucher au job existant.
+      - ./docker/traefik:/backup/traefik-config:ro
+      # Backups physiques MariaDB (mariabackup) : 60GB de données compressées en
+      # ~15GB. Le DAG Dagu « mariadb_fetch » (02:00) se connecte en SSH au serveur
+      # MariaDB, exécute mariabackup-daily.sh, et dépose les archives .zst dans ce
+      # dossier. DBackup les archive ensuite vers le NFS via le job "Fichiers -
+      # mariadb-physical" (04:40). Dossier partagé entre Dagu (écriture) et DBackup
+      # (lecture seule). Chemin hôte : /data/backup/mariadb (production).
+      # Configuration : voir scripts/backup/README.md.
+      - ${MARIADB_BACKUP_HOST_PATH:-/data/backup/mariadb}:/backup/mariadb-backups:ro
+      # Discothèque des quatre antennes : les MP3 que lisent sc_trans et le
+      # player. Comme les médias téléversés, rien ne la régénère — ni git, ni
+      # les bases ; elle vient de l'arbre du V1. La variable est celle du
+      # montage de php et des antennes, donc le serveur sauvegarde exactement
+      # l'arbre qui joue l'antenne, et non un second chemin à tenir à jour.
+      # Lecture seule ici aussi : une source ne s'écrit jamais.
+      #
+      # Ici, la variable ne peut plus avoir le même défaut que le montage du
+      # site : la discothèque vit sous l'autre dépôt. Le .env de l'infrastructure
+      # la déclare donc en « ../Yabiladi-V2-Symfony/data/radio_content » ; le
+      # repli écrit ci-dessous reste celui de l'ancien fichier et ne sert que si
+      # la variable manque — il créerait alors un dossier vide dans CE dépôt,
+      # archivé à vide chaque nuit, sans erreur.
+      - ${RADIO_CONTENT_HOST_PATH:-./data/radio_content}:/backup/radio-content:ro
+    ports:
+      - "127.0.0.1:${DBACKUP_HTTP_PORT:-8087}:3000"
+    healthcheck:
+      # Endpoint non authentifié (vérifié sur v4.0.2) : il répond « database :
+      # connected », donc il voit la base SQLite se mettre en place au premier
+      # démarrage — c'est ce premier démarrage que l'amorçage doit attendre.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      # Un seul nom, backups.yabiladi.com, et le même compte basicauth qu'avant :
+      # c'est l'accès qui devait survivre au changement d'outil, pas la console.
+      # Comme sur les autres routeurs, la valeur du serveur est versionnée et le
+      # poste de développement vide le label dans compose.override.yaml.
+      - "traefik.http.routers.dbackup.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dbackup.rule=Host(`backups.yabiladi.com`)"
+      - "traefik.http.routers.dbackup.entrypoints=websecure"
+      - "traefik.http.routers.dbackup.tls=true"
+      - "traefik.http.routers.dbackup.middlewares=dbackup-htpasswd"
+      # Protection « .htaccess » externalisée : le fichier est lu par Traefik, la
+      # console n'a donc rien à configurer et ne peut pas être atteinte sans le
+      # mot de passe, même si son authentification interne est désactivée.
+      # Le dossier docker/traefik/htpasswd/ n'est pas versionné : le compte y
+      # est posé par environnement (hash bcrypt, Traefik ne connaît que celui-là).
+      - "traefik.http.middlewares.dbackup-htpasswd.basicauth.usersfile=/etc/traefik/htpasswd/user_yabiladi"
+      - "traefik.http.middlewares.dbackup-htpasswd.basicauth.removeheader=true"
+      - "traefik.http.services.dbackup.loadbalancer.server.port=3000"
+    networks:
+      - app
+    logging: *docker-logs
+
+  # ---------------------------------------------------------------------------
+  # Centralisation des logs et mesure (mission 2026-10, complétée 2026-11) :
+  # Loki stocke, Alloy collecte, Grafana consulte ; Prometheus récolte,
+  # node_exporter et cAdvisor mesurent. Six conteneurs, monolithiques, aucun
+  # autre composant : ni Elasticsearch, ni Mimir, ni Alertmanager.
+  #
+  # Les trois premiers répondent à « qu'est-il écrit ?», les trois derniers à
+  # « combien cela coûte ? ». Les seconds ont été ajoutés le 2026-11-04 parce
+  # que la question ne se lit dans aucun journal : la CPU, la RAM, les E/S et le
+  # réseau de chaque conteneur ne passent pas par stdout. Le bloc écrit
+  # « ni Prometheus ni cAdvisor » le 2026-10-29 est donc périmé — la raison
+  # invoquée (« tout ce qui est affiché ici se lit dans les logs ») restait vraie
+  # pour les onze tableaux de l'époque, plus pour « Docker et système ».
+  # Versions vérifiées le 2026-11-04 sur les registres officiels (pas de « latest ») :
+  #   grafana/loki:3.7.9   sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28
+  #   grafana/alloy:v1.21.3 sha256:8ab871206bd2d8f89277f53abffee5f452a293980788d52f85fa183a87a505a4
+  #   grafana/grafana:13.3.0 sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
+  #   prom/prometheus:v3.15.1   sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+  #   prom/node-exporter:v1.12.1 sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
+  #   ghcr.io/google/cadvisor:0.60.6 sha256:b8e7d1093144fd088f425ff003d75a4aa405de075db78dae3bc563730b1bd07a
+  #   (cAdvisor ne se publie plus sur Docker Hub — « google/cadvisor » s'est arrêté
+  #   en 2021 à v0.33.0 — ni sur gcr.io, où le dépôt est marqué « no-new-use-public-image »)
+  # Plafonds CPU/RAM : ce sont des limites hautes, pas une consommation garantie.
+  # Une pointe d'ingestion ou une requête large peut les atteindre et ralentir
+  # le conteneur concerné (voir docs/logging/README.md, « Limites réelles »).
+  # ---------------------------------------------------------------------------
+
+  # Stockage et recherche des logs. Jamais publié sur un port de l'hôte, jamais
+  # relié au réseau « app » : seules les adresses internes du réseau « logging »
+  # l'atteignent, donc Internet ne peut pas interroger l'API de Loki.
+  loki:
+    image: grafana/loki:3.7.9
+    # L'image attend un -config.file explicite : sans lui, Loki démarre avec la
+    # configuration d'exemple du dépôt (rétention, stockage et parallélisme non
+    # bornés). Tout le calibrage vit dans docker/loki/config.yaml, versionné.
+    command:
+      - -config.file=/etc/loki/config.yaml
+      # Mono-tenant : sans X-Scope-OrgID exigé, la lecture Grafana et la
+      # poussée Alloy fonctionnent sans identifiant. La valeur par défaut de
+      # Loki est « true », donc il faut bien le dire ici.
+      - -auth.enabled=false
+      - -log.level=info
+    environment:
+      # Le fuseau des fichiers d'index (journal_2026-10-29) doit suivre celui
+      # des tâches Dagu et des sauvegardes : sinon la rétention « 30 jours » ne
+      # correspond plus aux dates que lisent les opérateurs.
+      TZ: ${LOGGING_TZ:-Europe/Paris}
+    volumes:
+      - ./docker/loki/config.yaml:/etc/loki/config.yaml:ro
+      # Données Loki (chunks TSDB, index, marqueurs de suppression). Le défaut
+      # est la valeur du serveur : /data/logging, un NVMe dont l'espace libre est
+      # vérifié par tools/logging/preflight.sh. Le poste de développement ne
+      # passe pas par ce montage — compose.override.yaml (hors versionnage) le
+      # remplace par le volume nommé loki_data.
+      - ${LOGGING_HOST_DATA_PATH:-/data/logging}/loki:/loki
+    networks:
+      - logging
+    healthcheck:
+      # L'image loki est DISTROLESS (gcr.io/distroless/static:nonroot) : ni
+      # shell, ni curl, ni wget. C'est la commande interne du binaire qui
+      # interroge /ready, comme dans le compose officiel de Loki.
+      test: ["CMD", "/usr/bin/loki", "-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # Collecteur : découvre les conteneurs par l'API Docker et suit leurs flux
+  # stdout/stderr. Son interface HTTP reste sur 127.0.0.1 dans le conteneur et
+  # n'est publiée sur aucun port de l'hôte : pas d'UI d'administration
+  # accessible, pas de /-/reload exposé.
+  alloy:
+    image: grafana/alloy:v1.21.3
+    # L'image crée un utilisateur « alloy » (UID 473) mais ne bascule pas
+    # dessus : le Dockerfile v1.21.3 dit expressément que le non-root en
+    # conteneur reste « experimental, undocumented ». Le passer en 473:473
+    # exigerait que ce UID puisse lire le socket Docker (groupe « docker » de
+    # l'hôte, même GID) : risque et contrepartie documentés dans
+    # docs/logging/README.md, section « Socket Docker ».
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      # Listen-addr en loopback interne au conteneur : l'UI et le reload ne
+      # quittent pas l'espace réseau d'Alloy.
+      - --server.http.listen-addr=127.0.0.1:12345
+      # Les offsets de lecture (positions) y vivent : c'est ce qui évite de
+      # relire ou de perdre des logs après un redémarrage du conteneur.
+      - --storage.path=/var/lib/alloy/data
+    environment:
+      # Valeur du label Loki « host ». Fixe et court : il ne doit surtout pas
+      # venir du nom du conteneur, qui change à chaque recréation.
+      HOSTNAME: ${LOG_HOSTNAME:-yabiladi}
+      TZ: ${LOGGING_TZ:-Europe/Paris}
+    volumes:
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      # Seul point sensible de la pile : la lecture des logs des autres
+      # conteneurs passe par l'API Docker. Montage en lecture seule + réseau
+      # interne + aucune publication de port ; le risque résiduel (l'accès API
+      # vaut un accès quasi-root sur l'hôte) est documenté, pas nié.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - logging
+    depends_on:
+      - loki
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # Interface de consultation, seule exposition publique de la pile.
+  grafana:
+    image: grafana/grafana:13.3.0
+    # UID/GID de l'utilisateur « grafana » de l'image : le bind mount de
+    # /var/lib/grafana doit lui appartenir sur l'hôte (preflight.sh indique le
+    # chown 472:472 à poser), sinon Grafana ne peut pas écrire sa base SQLite.
+    user: "472:472"
+    environment:
+      TZ: ${LOGGING_TZ:-Europe/Paris}
+      # URL publique : sert aux liens des e-mails et aux redirections. Doit
+      # finir par « / » et correspondre exactement au Host servi par Traefik.
+      # Les valeurs par défaut sont celles de la PRODUCTION : le fichier
+      # versionné doit rester valide tel quel sur le serveur, où le déploiement
+      # se fait par « git pull » sans retouche. Le poste de développement sert
+      # le même nom (résolution locale, certificat auto-signé de dynamic.yml) :
+      # rien ne diffère entre les deux environnements.
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-https://grafana.yabiladi.com/}
+      GF_SERVER_DOMAIN: ${GRAFANA_HOST:-grafana.yabiladi.com}
+      # Compte d'administration : le nom est un identifiant, pas un secret, il
+      # peut rester dans .env ; le mot de passe vit uniquement dans le fichier
+      # monté sous /run/secrets (0640, root:472, hors git — voir la section
+      # « secrets » en fin de fichier pour le pourquoi du groupe 472).
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-yabiladi}
+      # Le suffixe « __FILE » (DEUX underscores) est la syntaxe Grafana pour
+      # lire la valeur d'un réglage dans un fichier. « GF_..._PASSWORD_FILE »
+      # avec un seul underscore n'est pas un nom de clé connu : Grafana
+      # l'ignore silencieusement et garde le mot de passe par défaut « admin ».
+      # Vérifié en réel : avec la forme à un underscore, l'API répond 200 avec
+      # le compte yabiladi/admin.
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      # Authentification native laissée ACTIVE : la barrière Traefik
+      # (ipallowlist + basicauth) et la session Grafana sont deux couches
+      # distinctes, et la première ne prouve rien à la seconde. Désactiver
+      # GF_AUTH_BASIC_ENABLED exposerait la session à quiconque atteint le
+      # conteneur depuis le réseau interne. Justification détaillée dans
+      # docs/logging/README.md.
+      GF_AUTH_BASIC_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer
+      # Fonctions analytiques et téléphones à domicile désactivés : rien ne
+      # doit sortir du serveur, et chaque appel externe est du temps CPU perdu.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGINS_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      # Le plus petit rafraîchissement proposé dans l'UI : 30 s. En dessous,
+      # sept dashboards ouverts par trois personnes suffisent à tapiner Loki.
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 30s
+      GF_LOG_LEVEL: warn
+      # --- transport des alertes -------------------------------------------
+      # Les règles d'alerte Radio (docker/grafana/provisioning/alerting)
+      # préviennent par e-mail. Sans GF_SMTP_ENABLED, Grafana enregistre la
+      # notification mais ne l'envoie nulle part — le provisioning d'un contact
+      # point « email » ne suffit pas.
+      GF_SMTP_ENABLED: "true"
+      # Transport : Resend via son relais SMTP authentifié (même compte que le
+      # bot monitor — BOT_MONITOR_MAILER_DSN dans .env.local). Le mot de passe
+      # n'arrive JAMAIS dans « environment » ni dans « docker compose config » :
+      # il est lu depuis /run/secrets/grafana_smtp_password par le suffixe
+      # « __FILE » (syntaxe officielle Grafana, identique à
+      # GF_SECURITY_ADMIN_PASSWORD__FILE ci-dessus). Le fichier est posé par
+      # deploy.sh, dérivé du DSN déjà scellé dans le coffre — aucune saisie,
+      # aucune nouvelle entrée SOPS.
+      GF_SMTP_HOST: ${GRAFANA_SMTP_HOST:-smtp.resend.com:587}
+      GF_SMTP_USER: ${GRAFANA_SMTP_USER:-resend}
+      GF_SMTP_PASSWORD__FILE: /run/secrets/grafana_smtp_password
+      # La même adresse que l'enveloppe du Mailer (MAILER_ENVELOPE_SENDER dans
+      # .env et config/packages/mailer.yaml) : le SPF est évalué sur le domaine
+      # de l'enveloppe et le DMARC sur celui du From, et yabiladi.com est en
+      # « p=quarantine ». Une adresse inventée ici — même @yabiladi.com, même
+      # noreply@ — partirait en spam faute d'alignement, et l'alerte ne serait
+      # jamais lue. Le domaine yabiladi.com est vérifié côté Resend : les mails
+      # sortants sont signés DKIM par le relais, en plus de SPF.
+      GF_SMTP_FROM_ADDRESS: ${GRAFANA_SMTP_FROM_ADDRESS:-webmaster@yabiladi.com}
+      GF_SMTP_FROM_NAME: Yabiladi - supervision
+      # STARTTLS obligatoire : Resend exige une négociation TLS sur le port 587.
+      # « Noop » (l'ancien réglage pour Postfix local) ferait échouer la remise
+      # avec une erreur d'authentification TLS.
+      GF_SMTP_STARTTLS_POLICY: Mandatory
+    volumes:
+      - ${LOGGING_HOST_DATA_PATH:-/data/logging}/grafana:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    secrets:
+      - grafana_admin_password
+      - grafana_smtp_password
+    ports:
+      # Publication en loopback uniquement, comme dagu (8086) et dbackup
+      # (8087) : c'est Traefik qui sert le public, et « 127.0.0.1: » empêche
+      # toute écoute sur les interfaces externes. A contrôlé avec
+      # « ss -ltnp | grep :3000 : vide » et « ss -ltnp | grep :8088 : 127.0.0.1 ».
+      - "127.0.0.1:${GRAFANA_HTTP_PORT:-8088}:3000"
+    networks:
+      # « app » pour que Traefik l'atteigne, « logging » pour qu'elle atteigne Loki.
+      - app
+      - logging
+    depends_on:
+      loki:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      # Deux réseaux : Traefik doit savoir lequel il peut joindre, sinon son
+      # choix dépend de l'ordre des réseaux retournés par l'API Docker. Le nom
+      # réel n'est plus dérivé du nom du projet Compose : il est écrit en toutes
+      # lettres en bas de ce fichier (« networks: app: name: yabiladi_app »),
+      # d'où « yabiladi_app » ici et dans tous les projets, quoi que devienne le
+      # « name: » de l'un ou l'autre dépôt — à vérifier avec « docker network ls ».
+      - "traefik.docker.network=yabiladi_app"
+      # Un seul nom, grafana.yabiladi.com.
+      #
+      # Le résolveur est actif par défaut : sur le serveur, le certificat est
+      # demandé au premier « up -d », sans ligne à ajouter à la main. Le poste
+      # de développement le neutralise dans son compose.override.yaml par un
+      # label vide — mesuré le 2026-10-30 : Traefik garde le routeur actif et
+      # sert le certificat de dynamic.yml, aucune requête ACME n'est émise
+      # (pas de champ « certResolver » dans /api/http/routers, aucun log ACME).
+      # C'est le seul routeur de la pile dans ce cas ; dagu, la console de
+      # sauvegarde et le site gardent leur activation manuelle, liée à leurs
+      # propres bascules.
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.yabiladi.com`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.routers.grafana.middlewares=grafana-ipallow,grafana-htpasswd"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      # Protection : les DEUX mêmes mécanismes que Dagu (liste d'adresses +
+      # basicauth bcrypt), mais déclarés ici et non repris depuis le conteneur
+      # dagu. Mesuré le 2026-10-29 avec la reprise simple : pendant que dagu
+      # était recréé, Traefik répondait
+      #   ERR error="middleware \"dagu-htpasswd@docker\" does not exist" routerName=grafana…
+      # — un middleware déclaré par un conteneur n'existe que si CE conteneur
+      # vit. Grafana se retrouvait sans barrière (routeur en erreur, 503) parce
+      # qu'un service sans rapport avait redémarré.
+      # Ce qui est réutilisé reste bien les mêmes éléments : la variable
+      # d'environnement DAGU_ALLOWED_IPS (source unique du plafond d'adresses)
+      # et le fichier /etc/traefik/htpasswd/user_yabiladi (mêmes comptes, aucun
+      # nouveau mot de passe, aucune copie de hash). Changer le mot de passe dans
+      # ce fichier change donc aussi l'accès à Grafana.
+      - "traefik.http.middlewares.grafana-ipallow.ipallowlist.sourceRange=${DAGU_ALLOWED_IPS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+      - "traefik.http.middlewares.grafana-htpasswd.basicauth.usersfile=/etc/traefik/htpasswd/user_yabiladi"
+      - "traefik.http.middlewares.grafana-htpasswd.basicauth.removeheader=true"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Mesure : Prometheus récolte, node_exporter et cAdvisor produisent.
+  #
+  # Ce triptyque ne remplace rien de la pile de logs : il répond à une autre
+  # question. Un journal dit « une requête a échoué », jamais « la CPU du
+  # conteneur était saturée au même instant ». Les deux se lisent maintenant sur
+  # le même axe temporel, Grafana superposant les requêtes Loki et Prometheus.
+  #
+  # Règles communes aux trois conteneurs, les mêmes que pour loki et alloy :
+  #   - réseau « logging » uniquement, jamais « app » : aucune de leurs API
+  #     n'atteint le réseau applicatif, et donc rien n'atteint l'hôte ;
+  #   - aucun routeur Traefik, aucun certificat, aucun compte : l'exposition
+  #     publique reste Grafana seule. Prometheus n'est publié QUE sur la boucle,
+  #     pour le debug de la console (les cibles et l'état du TSDB), exactement
+  #     comme grafana (8088), dagu (8086) et dbackup (8087) ;
+  #   - « restart: unless-stopped » et plafond CPU/RAM, pour la même raison : un
+  #     collecteur qui diverge ne doit pas manger le serveur.
+  #
+  # Un alerting à part n'est pas ici : Grafana tient déjà les règles
+  # (docker/grafana/provisioning/alerting) et lit la même source. Deux
+  # Alertmanager sur les mêmes métriques font deux files de notifications, dont
+  # une que personne ne regarde.
+  # ---------------------------------------------------------------------------
+
+  # Le TSDB et sa récolte. Rien n'est publié hors de la boucle : l'API HTTP de
+  # Prometheus vaut un accès en lecture à toutes les mesures du serveur, donc
+  # elle reste derrière 127.0.0.1, comme les trois autres consoles de debug.
+  #
+  # Aucune variable d'environnement n'est passée ici, et ce n'est pas un oubli :
+  # Prometheus ne substitue rien d'exploitable dans les étiquettes de scrape
+  # (mesuré le 2026-11-04, les deux formes « ${VAR} » et « $VAR » restent
+  # littérales). Le nom de la machine — le même que le label « host » d'Alloy —
+  # est donc écrit en toutes lettres dans docker/prometheus/prometheus.yml, avec
+  # la raison de cette écriture et ce qu'elle coûte.
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    # L'image s'exécute déjà en « nobody » (65534:65534), vérifié :
+    # « docker run --entrypoint /bin/sh prom/prometheus:v3.15.1 -c id ». Aucun
+    # « user: » ici : le reposer serait répéter une décision de l'image, et une
+    # décision répétée se démode. Contrepartie : le répertoire d'hôte doit
+    # appartenir à 65534, sinon le premier démarrage meurt sur « permission
+    # denied » en écrivant son WAL (docs/logging/README.md, § Déploiement).
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Double borne, et les deux comptent. « 15 d » seul peut tout de même
+      # grossir sans limite si le cardinal change (une série par conteneur et
+      # par mesure : vingt recréations de la pile ajoutent vingt séries).
+      # « 2 GB » seul peut jeter quinze jours d'historique au profit d'une
+      # pointe. La plus petite des deux gagne, donc la rétention réelle est
+      # « 15 jours AU PLUS, 2 Go AU PLUS ».
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
+      # /-/reload et /-/quit restent désactivés (c'est le défaut, et le poser
+      # ici n'ouvrirait qu'une prise de contrôle à distance sur un service déjà
+      # joignable depuis le réseau « logging » par n'importe quel conteneur qui y
+      # est branché). La configuration se corrige dans le dépôt.
+    environment:
+      TZ: ${LOGGING_TZ:-Europe/Paris}
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Même discipline que pour loki et grafana : les blocs de données vivent
+      # sur le NVMe de rétention, jamais sur le disque de l'image. Le poste de
+      # développement remplace ce montage par le volume nommé « prometheus_data »
+      # dans compose.override.yaml (hors versionnage).
+      - ${LOGGING_HOST_DATA_PATH:-/data/logging}/prometheus:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HTTP_PORT:-8089}:9090"
+    networks:
+      - logging
+    healthcheck:
+      # L'image est busybox-based : « /bin/wget » existe (vérifié), contrairement
+      # aux images distroless de la pile, d'où la sonde « /-/healthy » classique.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # Mesures de la MACHINE : CPU, mémoire, disque, réseau, charge.
+  #
+  # « --path.rootfs=/host » est tout le mécanisme : le conteneur lit le /proc et
+  # le /sys de l'hôte à travers un montage en lecture seule, au lieu de vivre
+  # dans le namespace réseau et le cgroup du conteneur (qui ne mesureraient
+  # qu'une interface veth et 64 Mo). Pas de « pid: host », pas de
+  # « network_mode: host », pas de « privileged » : aucune de ces trois portes
+  # n'est nécessaire pour lire des fichiers.
+  #
+  # Les deux exclusions ajoutées aux valeurs par défaut de v1.12.1 le sont sur
+  # mesure réelle, pas par principe :
+  #   - le montage 9p du poste de développement et les « virtiofs » de Docker
+  #     Desktop apparaissent comme des systèmes de fichiers « réels » et
+  #     peuplent les panneaux disque de lignes sans signification ;
+  #   - chaque container recréé laisse une interface veth, et chaque réseau
+  #     Compose son pont : sans exclusion, le panneau réseau présente plus de
+  #     ponts temporaires que de cartes physiques.
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|erofs|sysfs|tracefs|9p|virtiofs|fuse|tmpfs|ramfs|devtmpfs)$
+      - --collector.netdev.device-exclude=^(lo|veth.*|br-.*|docker.*|virbr.*|tap.*|cni.*|flannel.*|kube.*)$
+      # « tcpstat » lit /proc/net/tcp de l'hôte (passage par rootfs, donc aucun
+      # namespace réseau partagé nécessaire) et donne l'état réel des connexions
+      # TCP : la seule façon de voir une file de connexions s'empiler avant que
+      # les logs ne parlent d'erreurs. Désactivé par défaut dans l'image.
+      - --collector.tcpstat
+    volumes:
+      # « rslave » : sans réplication de montage, ce que Docker monte après le
+      # démarrage du conteneur (un volume, un bind d'un service lancé plus tard)
+      # reste invisible et le panneau disque sous-annonce l'hôte. Exigence du
+      # serveur, PAS de ce poste : mesuré le 2026-11-04, Docker Desktop (WSL2)
+      # refuse le démarrage avec
+      #   Error response from daemon: path / is mounted on / but it is not a
+      #   shared or slave mount
+      # parce que sa racine n'a aucune propagation. Sur Debian, systemd rend « / »
+      # partagé et le montage passe. compose.override.yaml remplace donc ce
+      # montage par la forme sans propagation pour le développement.
+      - /:/host:ro,rslave
+    networks:
+      - logging
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9100/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # Mesures par CONTENEUR : CPU, mémoire working set, réseau, E/S, OOM.
+  #
+  # Trois décisions, chacune prise après mesure sur ce poste :
+  #   - « --store_container_labels=false » : avec la valeur par défaut « true »,
+  #     /metrics porte une centaine d'étiquettes « container_label_* » par série
+  #     (tous les labels Docker et image de tous les conteneurs, vides quand
+  #     absents) — mesuré le 2026-11-04. La liste blanche censée filtrer
+  #     (« --whitelisted_container_labels=com.docker.compose.service:service »)
+  #     n'a RIEN émis sur cette version : vérifié, aucune étiquette « service »
+  #     sur les séries d'un conteneur Compose. C'est donc Prometheus qui dérive
+  #     le nom du service depuis « name » (voir docker/prometheus/prometheus.yml).
+  #   - « --disable_metrics=disk » : c'est la collecte qui parcourt le répertoire
+  #     overlayfs de chaque conteneur pour en compter les inœuds et les octets.
+  #     Mesurée ici à 4 à 6 s PAR conteneur (journal interne, plusieurs lignes
+  #     « disk usage and inodes count ... took 5.1 s » au premier housekeeping) :
+  #     inutile sur un poste, et hors de prix sur le serveur. « diskIO » reste
+  #     actif, c'est lui qui donne les octets lus et écrits.
+  #   - « --docker_only=true » : sans lui, cAdvisor déclare aussi les cgroups
+  #     système de l'hôte (init.scope, user.slice, ...) comme des « conteneurs »,
+  #     et le tableau se peuple de lignes que personne n'a lancées.
+  #
+  # L'image tourne en root (aucune directive USER dans son Dockerfile) : elle
+  # doit lire /sys, /proc et l'arborescence /var/lib/docker. Monter ces chemins
+  # en « :ro » ne vaut pas isolation — c'est la même réserve que pour le socket
+  # Docker d'Alloy, documentée dans docs/logging/README.md, section
+  # « Socket Docker ».
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.60.6
+    command:
+      - --docker_only=true
+      - --store_container_labels=false
+      - --disable_metrics=disk
+      # 15 s au lieu de la seconde par défaut : un relevé par seconde et par
+      # conteneur ne s'affiche nulle part ici. Grafana rafraîchit au plus vite
+      # toutes les 30 s (GF_DASHBOARDS_MIN_REFRESH_INTERVAL) et Prometheus scrape
+      # à la même période.
+      - --housekeeping_interval=15s
+      - --max_housekeeping_interval=60s
+    volumes:
+      - /:/rootfs:ro
+      # /var/run porte le socket du démon Docker : c'est par lui que cAdvisor
+      # connaît les noms de conteneurs, pas seulement leurs identifiants.
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    networks:
+      - logging
+    # Pas de healthcheck déclaré : l'image en porte un (CMD-SHELL
+    # /usr/bin/healthcheck.sh, 30 s) — vérifié dans son manifeste. Le répéter
+    # dans compose.yaml écraserait un réglage qui connaît déjà son propre binaire.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 192M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # Relais SMTP sortant, unique : il sert à la fois au serveur et au poste de
+  # publié et aucun mail entrant n'est accepté : seuls les conteneurs du réseau
+  # « app » (php, dagu, grafana) peuvent lui confier un message. Il remet donc
+  # réellement — une alerte testée sur un poste part à sa vraie destinataire.
+  postfix:
+    build:
+      context: docker/postfix
+    networks:
+      - app
+    volumes:
+      # File d'attente conservée entre deux redémarrages : un message accepté
+      # puis non remis ne doit pas disparaître au redéploiement.
+      - postfix_spool:/var/spool/postfix
+    healthcheck:
+      test: ["CMD-SHELL", "postfix status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *docker-logs
+    restart: unless-stopped
+
+# ---------------------------------------------------------------------------
+# Volumes. Chacun porte son nom physique : ils existent déjà sur le serveur
+# sous le projet « yabiladi », et détruire un magasin ACME, une base DBackup ou
+# la file Postfix pour une raison de rangement de fichiers serait une perte
+# réelle, pas un détail. Le mode « external: true » n'est pas utilisé ici :
+# c'est CE fichier qui les crée, les projets voisins qui les reprennent les
+# déclarent externes (le site pour geoip_data, lu par son DAG radio-stats).
+# ---------------------------------------------------------------------------
+volumes:
+  # File d'attente Postfix : un message accepté puis non remis survit au
+  # redéploiement (voir le service plus haut).
+  postfix_spool:
+    name: yabiladi_postfix_spool
+  traefik_acme:
+    name: yabiladi_traefik_acme
+  # Base GeoLite2 (GeoLite2-Country.mmdb) téléchargée par geoipupdate et lue
+  # par le parseur de statistiques radio.
+  geoip_data:
+    name: yabiladi_geoip_data
+  # État interne de DBackup : sa base SQLite (jobs, identifiants chiffrés,
+  # historique) et les clés de son coffre. Les archives, elles, sont sur
+  # DBACKUP_DEST_HOST_PATH et survivent à la destruction du conteneur — mais pas
+  # cette base : sans elle, plus moyen d'ouvrir des archives chiffrées dont la
+  # clé n'est enregistrée qu'ici (d'où le kit de récupération à télécharger).
+  dbackup_data:
+    name: yabiladi_dbackup_data
+  # Dossier tampon des archives en cours de production : écrire plusieurs gigaoctets
+  # directement sur le NFS est lent et laisse des fichiers à moitié écrits en cas
+  # d'arrêt ; l'archive finie y est déplacée depuis ce volume.
+  dbackup_tmp:
+    name: yabiladi_dbackup_tmp
+  # Positions de lecture d'Alloy (offsets déjà envoyés à Loki) et état interne
+  # du collecteur : un volume nommé suffit, ces quelques kilo-octets n'ont rien
+  # à faire sur le NVMe de rétention et se régénèrent en relisant depuis la fin
+  # des flux. Les logs eux-mêmes ne sont jamais stockés ici.
+  alloy_data:
+    name: yabiladi_alloy_data
+
+# Réseau interne de la centralisation : Alloy -> Loki et Grafana -> Loki y
+# circulent sans jamais toucher « app », et donc sans jamais toucher l'hôte.
+# « app » reste le seul réseau partagé avec les applications, et uniquement
+# pour que Traefik atteigne Grafana.
+#
+# Les deux noms sont fixés explicitement, pour la même raison que les volumes :
+# le label « traefik.docker.network=yabiladi_app » posé par les projets dépend
+# du nom RÉEL du réseau, pas du nom du projet Compose qui l'a créé. Ce fichier
+# les crée (« docker compose up -d » ici) ; les autres projets les déclarent
+# « external: true » et ne peuvent donc démarrer qu'après celui-ci — c'est
+# l'ordre unique que suit le déploiement de la pile, et deploy.sh le vérifie
+# avant toute commande Compose.
+networks:
+  app:
+    name: yabiladi_app
+  logging:
+    name: yabiladi_logging
+
+secrets:
+  # Mot de passe d'administration Grafana : fichier hors versionnage (voir
+  # .gitignore), jamais affiché par un script, jamais recopié dans .env.
+  # Posé par tools/logging/bootstrap-grafana-admin.sh, monté par Compose en
+  # lecture seule sous /run/secrets/grafana_admin_password, en 0640 root:472
+  # (GID 472 = l'utilisateur « grafana » du conteneur ; un 0400 root:root serait
+  # illisible par lui et Grafana échouerait au démarrage).
+  grafana_admin_password:
+    file: ${GRAFANA_ADMIN_PASSWORD_FILE:-./docker/grafana/secrets/admin_password}
+  # Mot de passe SMTP Resend de Grafana : dérivé par deploy.sh depuis
+  # BOT_MONITOR_MAILER_DSN (déjà scellé dans le coffre via .env.local). Même
+  # régime que grafana_admin_password — fichier hors git, jamais affiché, monté
+  # en lecture seule sous /run/secrets, 0640 root:472. Le secret n'est pas
+  # dans le coffre SOPS : il n'a pas de source propre, il est calculé à chaque
+  # déploiement depuis une valeur qui, elle, est scellée.
+  grafana_smtp_password:
+    file: ${GRAFANA_SMTP_PASSWORD_FILE:-./docker/grafana/secrets/smtp_password}
