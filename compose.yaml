@@ -47,21 +47,9 @@ name: yabiladi-infra
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# Antennes communes aux conteneurs de l'infrastructure
+# Ancres partagées par les conteneurs de l'infrastructure
 # ---------------------------------------------------------------------------
 
-# Secret de la console de sauvegarde, posé par le coffre comme credentials.env :
-# ces clés-là ne sont lues par aucun Dotenv de Symfony, seulement par l'image
-# DBackup, qui ne connaît que l'environnement du conteneur.
-#
-# « required: false » reprend le réglage de credentials.env — un fichier absent
-# ne doit pas casser « docker compose ps » pour le reste de la pile, qu'un autre
-# chantier tient parfois. Le garde-fou n'est pas là, il est dans deploy.sh (qui
-# meurt avant « up -d ») et dans la garde « variables minimales » du coffre :
-# laisser DBackup démarrer sans ces valeurs serait pire qu'un échec, le conteneur
-# s'invente alors un ENCRYPTION_KEY et un BETTER_AUTH_SECRET différents à chaque
-# création, ce qui vide ses sessions et rend illisibles les identifiants déjà
-# chiffrés dans son coffre interne.
 # Secret de la console de sauvegarde, posé par le coffre comme credentials.env :
 # ces clés-là ne sont lues par aucun Dotenv de Symfony, seulement par l'image
 # DBackup, qui ne connaît que l'environnement du conteneur.
@@ -78,17 +66,6 @@ x-dbackup-secrets: &dbackup-secrets
   - path: docker/legacy/dbackup.env
     required: false
 
-# Rotation des fichiers de logs Docker créés par le driver json-file. Ces lignes
-# ne s'appliquent qu'aux conteneurs déclarés ici : un conteneur déjà créé garde
-# la configuration de sa création (Docker ne reconfigure pas l'existant) et la
-# changer dans ce fichier imposerait de le recréer — d'où le script
-# tools/logging/docker-log-rotation.sh, qui traite la valeur par défaut de
-# l'hôte séparément et sans redémarrer le démon.
-# Sans plafond, le json-file d'un conteneur bavard (Nginx sous charge) grossit
-# jusqu'à saturer le disque : 3 fichiers de 10 Mo = 30 Mo par conteneur au plus.
-# A ne pas confondre : cette rotation borne les fichiers LOCAUX de Docker, la
-# rétention de 30 jours des logs centralisés se joue dans Loki
-# (docker/loki/config.yaml). L'une ne remplace pas l'autre.
 # Rotation des fichiers de logs Docker créés par le driver json-file. Ces lignes
 # ne s'appliquent qu'aux conteneurs déclarés ici : un conteneur déjà créé garde
 # la configuration de sa création (Docker ne reconfigure pas l'existant) et la
@@ -118,20 +95,18 @@ services:
   # le flambeau, mais MaxMind en interdit la redistribution — le fichier doit
   # donc être téléchargé chez l'auteur avec un compte gratuit.
   #
-  # GEOIPUPDATE_ACCOUNT_ID et GEOIPUPDATE_LICENSE_KEY viennent de
-  # docker/legacy/credentials.env, jamais d'« environment » : l'interpolation
-  # ${…} les graverait dans .env, qui est versionné. L'image lit elle-même ces
-  # variables, rien n'est donc à déclarer ici.
+  # GEOIPUPDATE_ACCOUNT_ID et GEOIPUPDATE_LICENSE_KEY viennent du coffre de CE
+  # dépôt : deploy/secrets/geoip.sops.bin, projet « infra », déchiffré par
+  # deploy.sh en docker/legacy/geoip.env. Rien n'est interpolé dans « environment »
+  # (le « ${…} » graverait la clé dans .env, qui est versionné) : l'image lit
+  # elle-même ces deux variables depuis l'env_file, et le gabarit des noms vit
+  # à côté du fichier réel (docker/legacy/geoip.env.example).
   #
-  # Le fichier, lui, a bougé avec la séparation des dépôts : « credentials.env »
-  # est scellé dans le coffre sous le projet « site » (deploy/secrets.manifest) et
-  # matérialisé à la racine du dépôt du site. Les deux emplacements sont déclarés
-  # — celui de l'infrastructure d'abord, celui du site ensuite, qui l'emporte en
-  # cas de doublon — et « required: false » garde la règle héritée : un fichier
-  # absent ne doit pas casser « docker compose ps » de l'infrastructure, que l'on
-  # relance parfois pour Loki seul. Le conteneur, lui, échoue à la première
-  # tentative de téléchargement et le dit dans « docker ps » : comportement voulu
-  # ci-dessus, la base pays se contrôle par les statistiques radio.
+  # L'env_file est « required: false » : un « docker compose ps » de l'infra
+  # seule, sans scellement geoip posé, ne doit pas échouer sur cette ligne.
+  # Le conteneur, lui, échoue à la première tentative de téléchargement et le
+  # dit dans « docker ps » — comportement voulu ci-dessus, la base pays se
+  # contrôle par les statistiques radio, pas au démarrage de la pile.
   #
   # GEOIPUPDATE_FREQUENCY (en heures) fait tourner l'image en boucle : à 0 ou
   # absent, elle ne fait qu'un passage puis quitte, et « restart: unless-stopped »
@@ -144,9 +119,7 @@ services:
     image: ghcr.io/maxmind/geoipupdate:v8
     logging: *docker-logs
     env_file:
-      - path: docker/legacy/credentials.env
-        required: false
-      - path: ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/docker/legacy/credentials.env
+      - path: docker/legacy/geoip.env
         required: false
     environment:
       # Une seule édition : le code pays suffit aux compteurs d'audience, et
@@ -439,7 +412,7 @@ services:
       # d'un octet : c'est le nom du job, donc le nom du dossier d'archives sur
       # le dépôt et la chaîne de rétention attachée. Pointer ici le dépôt du site
       # archivait un dossier vide après le « git mv », sans le dire — le job se
-      # fut signalé « partiel » chaque nuit. Si une machine garde malgré tout un
+      # signalerait « partiel » chaque nuit. Si une machine garde malgré tout un
       # « docker/traefik » côté site (déménagement repoussé), la ligne
       # « ${SITE_HOST_DIR:-…}/docker/traefik:/backup/site-traefik-config:ro »
       # peut être ajoutée ici sans toucher au job existant.
@@ -1001,23 +974,29 @@ services:
     restart: unless-stopped
 
 # ---------------------------------------------------------------------------
-# Volumes. Chacun porte son nom physique : ils existent déjà sur le serveur
-# sous le projet « yabiladi », et détruire un magasin ACME, une base DBackup ou
-# la file Postfix pour une raison de rangement de fichiers serait une perte
-# réelle, pas un détail. Le mode « external: true » n'est pas utilisé ici :
-# c'est CE fichier qui les crée, les projets voisins qui les reprennent les
-# déclarent externes (le site pour geoip_data, lu par son DAG radio-stats).
+# Volumes. Chacun porte son nom physique et se déclare « external: true » : ils
+# existent déjà sur les machines sous le projet commun « yabiladi », et détruire
+# un magasin ACME, une base DBackup ou la file Postfix pour une raison de
+# rangement de fichiers serait une perte réelle, pas un détail.
+#
+# « external: true » plutôt que « name: » seul : la scission ne doit JAMAIS
+# créer un volume neuf vide. Compose échoue sur un volume absent, le nom
+# d'absence est explicite, et un poste vierge se règle par « deploy.sh » qui
+# joue « docker volume create » avant le premier « up -d ».
 # ---------------------------------------------------------------------------
 volumes:
   # File d'attente Postfix : un message accepté puis non remis survit au
   # redéploiement (voir le service plus haut).
   postfix_spool:
+    external: true
     name: yabiladi_postfix_spool
   traefik_acme:
+    external: true
     name: yabiladi_traefik_acme
   # Base GeoLite2 (GeoLite2-Country.mmdb) téléchargée par geoipupdate et lue
   # par le parseur de statistiques radio.
   geoip_data:
+    external: true
     name: yabiladi_geoip_data
   # État interne de DBackup : sa base SQLite (jobs, identifiants chiffrés,
   # historique) et les clés de son coffre. Les archives, elles, sont sur
@@ -1025,17 +1004,20 @@ volumes:
   # cette base : sans elle, plus moyen d'ouvrir des archives chiffrées dont la
   # clé n'est enregistrée qu'ici (d'où le kit de récupération à télécharger).
   dbackup_data:
+    external: true
     name: yabiladi_dbackup_data
   # Dossier tampon des archives en cours de production : écrire plusieurs gigaoctets
   # directement sur le NFS est lent et laisse des fichiers à moitié écrits en cas
   # d'arrêt ; l'archive finie y est déplacée depuis ce volume.
   dbackup_tmp:
+    external: true
     name: yabiladi_dbackup_tmp
   # Positions de lecture d'Alloy (offsets déjà envoyés à Loki) et état interne
   # du collecteur : un volume nommé suffit, ces quelques kilo-octets n'ont rien
   # à faire sur le NVMe de rétention et se régénèrent en relisant depuis la fin
   # des flux. Les logs eux-mêmes ne sont jamais stockés ici.
   alloy_data:
+    external: true
     name: yabiladi_alloy_data
 
 # Réseau interne de la centralisation : Alloy -> Loki et Grafana -> Loki y

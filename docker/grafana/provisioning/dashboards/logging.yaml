@@ -1,0 +1,90 @@
+# Provisionnement des dashboards par fichier (Grafana 13.3.0).
+#
+# Cinq fournisseurs = cinq dossiers d'affichage, avec le titre exact voulu
+# pour l'exploitation. Deux points vérifiés dans le code d'édition 13.3.0
+# (pkg/services/provisioning/dashboards/file_reader.go), parce que la
+# documentation ne les dit pas :
+#   - si le dossier « folder » n'existe pas, le fournisseur le CRÉE, avec le
+#     titre et le uid donnés ici : rien à cliquer après le déploiement ;
+#   - « folderUid: general » est refusé (uid réservé) et « Général » avec accent
+#     est bien un dossier distinct du « General » natif de Grafana.
+# Les noms de dossiers sont en français côté Grafana, les répertoires du dépôt
+# restent en ASCII : des dossiers « Général » dans git, montés sur un bind
+# mount, sont une source de problèmes d'encodage sans aucun bénéfice.
+#
+# Autres réglages :
+#   - updateIntervalSeconds: 30 au-dessus du seuil de 10 s : au-delà, Grafana
+#     sonde le répertoire au lieu de s'appuyer sur les événements filesystem,
+#     qui ne remontent pas de façon fiable à travers un bind mount ;
+#   - allowUiUpdates: false et disableDeletion: true : le git reste la seule
+#     source de vérité, un panneau modifié dans l'UI ne peut pas masquer
+#     silencieusement la version versionnée ;
+#   - aucun « __inputs » ni « foldersFromFilesStructure » : les deux sont
+#     incompatibles avec un dossier nommé explicite.
+apiVersion: 1
+
+providers:
+  - name: 'yabiladi-general'
+    orgId: 1
+    folder: 'Général'
+    folderUid: 'yabiladi-general'
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/general
+
+  - name: 'yabiladi-applications'
+    orgId: 1
+    folder: 'Applications'
+    folderUid: 'yabiladi-applications'
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/applications
+
+  - name: 'yabiladi-infrastructure'
+    orgId: 1
+    folder: 'Infrastructure'
+    folderUid: 'yabiladi-infrastructure'
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/infrastructure
+
+  # « Sauvegardes et batchs » : la console DBackup et Dagu (orchestrateur).
+  - name: 'yabiladi-backups-batchs'
+    orgId: 1
+    folder: 'Sauvegardes et batchs'
+    folderUid: 'yabiladi-backups-batchs'
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/backups-batchs
+
+  # « Radio » : les quatre antennes SHOUTcast. Un dossier à part parce que le
+  # public jugé n'est pas le même — ici on regarde ce que vivent les auditeurs
+  # du flux (sessions, durées, octets livrés) et ce que font sc_serv, sc_trans
+  # et le point de contrôle Dagu, pas ce que fait nginx. Tout vient de Loki :
+  # le DNAS répète son journal sur la sortie standard depuis ScreenLog=1
+  # (docker/radio/conf/sc_serv.conf.tpl), Alloy le collecterait sinon seulement
+  # pour sc_trans. Les agrégats par pays et par jour, eux, vivent dans MySQL
+  # (radio_connections et ses trois tables dérivées, écrites par le DAG
+  # radio-stats) et demanderaient une source de données supplémentaire.
+  - name: 'yabiladi-radio'
+    orgId: 1
+    folder: 'Radio'
+    folderUid: 'yabiladi-radio'
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/radio

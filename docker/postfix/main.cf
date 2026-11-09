@@ -1,0 +1,38 @@
+# Gabarit rendu au démarrage (entrypoint.sh) : seule ${POSTFIX_MYHOSTNAME} est
+# substituée. Les $variables restantes sont celles de Postfix.
+#
+# Rôle : relais SMTP sortant pour php/dagu. Aucun port n'est publié, aucune
+# authentification n'existe, aucun mail entrant n'est accepté (mydestination
+# vide) : le conteneur ne fait que remettre les messages aux MX destinataires.
+compatibility_level = 3.6
+myhostname = ${POSTFIX_MYHOSTNAME}
+mydomain = yabiladi.com
+myorigin = $mydomain
+mydestination =
+local_recipient_maps =
+
+inet_interfaces = all
+# Le SPF ne publie que des ip4 : sortir en IPv6 ferait échouer SPF sur les
+# serveurs qui n'ont pas de PTR v6.
+inet_protocols = ipv4
+# Tout conteneur du réseau « app » (php, dagu) peut relayer ; le réseau n'est
+# pas exposé hors du démon Docker.
+mynetworks_style = subnet
+
+smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination
+smtpd_helo_required = yes
+disable_vrfy_command = yes
+smtpd_tls_security_level = none
+
+# Sortie : STARTTLS opportuniste, vérification des certificats par la trousse
+# CA de Debian.
+smtp_tls_security_level = may
+smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+smtp_tls_loglevel = 1
+
+maillog_file = /dev/stdout
+message_size_limit = 26214400
+biff = no
+append_dot_mydomain = no
+readme_directory = no

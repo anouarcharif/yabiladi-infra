@@ -1,0 +1,1178 @@
+{
+  "uid": "yabiladi-dagu-jobs",
+  "title": "Dagu — tâches et exécutions",
+  "description": "Journal de l’ordonnanceur Dagu (deux formats cohabitent : logfmt « level=… msg=\"…\" » et texte simple « date HEURE LEVEL … »).",
+  "tags": [
+    "yabiladi",
+    "loki",
+    "dagu"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "",
+  "schemaVersion": 42,
+  "version": 0,
+  "id": null,
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {
+    "time_options": [
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "1d",
+      "7d",
+      "30d"
+    ]
+  },
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Conteneur",
+        "type": "query",
+        "hide": 0,
+        "skipUrlSync": false,
+        "datasource": {
+          "type": "loki",
+          "uid": "yabiladi-loki"
+        },
+        "query": "label_values({service=\"dagu\"}, container)",
+        "definition": "label_values({service=\"dagu\"}, container)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "allowCustomValue": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Lignes Dagu",
+      "description": "Tout le journal de l’ordonnanceur sur la période.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dagu\", container=~\"$container\"} [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE LIGNE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Lignes d’erreur",
+      "description": "Les deux formats de Dagu sont comptés : « level=ERROR » (logfmt, serveur et ordonnanceur) et « 2026-10-29 19:44:02 ERROR … » (slog, exécution des pas). Un « error= » quelconque est aussi compté, donc ce compteur est large : il annonce une anomalie, il ne la qualifie pas.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dagu\", container=~\"$container\"} |~ \"(level=(ERROR|WARN))|^[0-9-]+ [0-9:]+ (ERROR|WARN)|error=\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Démarrages de l’ordonnanceur",
+      "description": "Compteur de lignes « Rebuilding DAG definition index » : un redémarrage recrée l’index des DAGs.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dagu\", container=~\"$container\"} |~ \"Rebuilding DAG definition index\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Noms de DAG mentionnés",
+      "description": "Combien de DAG différents apparaissent dans le journal (label temporaire dag=, non indexé).",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "count(sum by (dag) (count_over_time({service=\"dagu\", container=~\"$container\"} | regexp \"dag=(?P<dag>[a-zA-Z0-9_\\\\-]+)\" [$__range])))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Volume par niveau",
+      "description": "Niveaux extraits de « level=… » ; les lignes au format texte sans level apparaissent dans la série vide.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (lvl) (count_over_time({service=\"dagu\", container=~\"$container\"} | regexp \"(?:level=|^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} )(?P<lvl>INFO|WARN|ERROR|DEBUG)\" [$__auto]))",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "{{lvl}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages les plus fréquents",
+      "description": "Attribut msg=\"…\" des lignes logfmt — permet de voir une tâche qui tourne en boucle ou un incident répété.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (msg) (topk(6, count_over_time({service=\"dagu\", container=~\"$container\"} | regexp \"msg=\\\"(?P<msg>[^\\\"]{1,60})\" [$__auto])))",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "{{msg}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Lignes par DAG",
+      "description": "Uniquement là où le journal contient `dag=`. Les statistiques d’exécution complètes (durées, tentatives, statuts) vivent dans la base de Dagu, pas dans stdout.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (dag) (count_over_time({service=\"dagu\", container=~\"$container\"} | regexp \"dag=(?P<dag>[a-zA-Z0-9_\\\\-]+)\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{dag}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Messages d’erreur par contenu",
+      "description": "Regroupement par message, borné aux 12 plus fréquents.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (msg) (topk(12, count_over_time({service=\"dagu\", container=~\"$container\"} |~ \"(?i)(error|failed)\" | regexp \"msg=\\\"(?P<msg>[^\\\"]{1,60})\" [$__range])))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{msg}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Dernières erreurs",
+      "description": "Lignes ERROR/failed du journal.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"dagu\", container=~\"$container\"} |~ \"(?i)(level=ERROR|failed|fatal)\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Fin d’exécution",
+      "description": "Lignes contenant « run finished » — c’est le seul événement de fin qui existe dans ce journal, avec le statut quand il est écrit.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"dagu\", container=~\"$container\"} |~ \"(?i)(DAG run finished|exit_code|status=|duration=)\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Tout le journal Dagu",
+      "description": null,
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"dagu\", container=~\"$container\"}",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 200,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Durée des exécutions (duration=…s)",
+      "description": "Dagu écrit « duration=8.2s » sur les lignes de fin d’exécution, dans les deux formats. La valeur convertie en secondes est la seule mesure de durée disponible ici : c’est la durée du DAG entier, pas celle de chaque pas.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "avg_over_time({service=\"dagu\", container=~\"$container\"} |~ \"DAG run finished\" | regexp \"duration=(?P<dur>[0-9.]+)s\" | unwrap dur [$__interval])",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "durée moyenne",
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "max_over_time({service=\"dagu\", container=~\"$container\"} |~ \"DAG run finished\" | regexp \"duration=(?P<dur>[0-9.]+)s\" | unwrap dur [$__interval])",
+          "queryType": "range",
+          "refId": "B",
+          "legendFormat": "durée maximum",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Fin d’exécution par DAG et statut",
+      "description": "« status=success » n’apparaît que sur les lignes qui le portent : une absence de ligne ne prouve rien. La variante en échec (« DAG run finished with error … exit_code=1 ») n’a pas de status=, elle ressort donc dans le groupe sans étiquette.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (dag, status) (count_over_time({service=\"dagu\", container=~\"$container\"} |~ \"DAG run finished\" | regexp \"dag=(?P<dag>[a-zA-Z0-9_-]+)( status=(?P<status>[a-z]+))?\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Exécutions terminées",
+      "description": "Lignes « DAG run finished » : succès comme échec. Une exécution qui n’a pas laissé de ligne (coupure du conteneur en plein pas) n’est pas comptée.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dagu\", container=~\"$container\"} |~ \"DAG run finished\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE LIGNE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 63
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Exécutions en échec",
+      "description": "Lignes disant explicitement l’échec : « DAG run finished with error », « status=failed » ou « exit_code= » non nul. Ne jamais déduire un succès de l’absence de ligne ici.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dagu\", container=~\"$container\"} |~ \"(DAG run finished with error|status=failed|exit_code=[1-9])\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE LIGNE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 63
+      }
+    },
+    {
+      "type": "text",
+      "title": "Formats réels et ce qui reste hors de portée",
+      "description": "",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "options": {
+        "content": "Dagu écrit **deux formats** dans le même flux, vérifiés dans Loki le 2026-10-29 :\n- `time=2026-10-29T20:59:40.171Z level=INFO msg=\"Rebuilding DAG definition index\" dir=/etc/dagu/dags` (serveur, ordonnanceur) ;\n- `2026-10-29 19:45:00 INFO DAG run finished dag=refresh_footer_cache status=success duration=8.2s` (exécution des pas) ;\n- `time=2026-10-29T19:40:36.102Z level=ERROR msg=\"DAG run finished with error\" dag=refresh_footer_cache exit_code=1 duration=12.4s`.\n\n**Disponible** : le nom du DAG (`dag=`), le statut de fin (`status=`), la durée totale (`duration=`), le code de sortie (`exit_code=`), les niveaux INFO/WARN/ERROR dans les deux formats.\n**Hors de portée sans instrumentation** :\n- la **durée d’un pas** isolé : `duration=` ne couvre que le DAG entier ; un pas ne laisse qu’une ligne `failed to execute step step=1 error=\"…\"` en cas d’échec ;\n- l’**historique des exécutions** et leur statut définitif : c’est la base SQLite de `dagu_data` et l’UI de Dagu, pas Loki ;\n- un compteur « succès » infaillible : **seule la présence** d’une ligne `DAG run finished` ou `status=success` vaut preuve. Le silence n’en est jamais une.\n\nVoir docs/logging/README.md, section « Limites ».",
+        "mode": "markdown"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 71
+      }
+    }
+  ]
+}

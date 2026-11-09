@@ -1,0 +1,148 @@
+# Fichiers que CE dépôt ne doit jamais voir passer par un « git add -A ».
+#
+# La règle est la même que dans les trois dépôts d'applications : un secret ne
+# voyage pas en clair dans git, et une configuration propre à une machine ne s'y
+# grave pas — sinon le « git pull » du jour J amènerait sur le serveur les
+# valeurs d'un poste de développement.
+#
+# Ce qui, à l'inverse, EST versionné ici et peut surprendre :
+#   - deploy/secrets/*.sops.bin : les blocs chiffrés du coffre. Ils voyagent
+#     avec le dépôt parce que le serveur se déploie par « git pull » ; illisibles
+#     sans la clé age, qui n'existe que sur la machine qui déchiffre.
+#   - .env : les valeurs de PRODUCTION non secrètes (noms publics, ports de
+#     boucle, fuseaux, CIDR d'administration, adresse de contact ACME).
+#   - les gabarits *.example et env.local.example : les NOMS de variables, pour
+#     qu'une machine neuve sache quoi déclarer sans ouvrir le coffre.
+
+###> configuration propre à la machine ###
+# Le fichier par machine, déchiffré du coffre (deploy/secrets/env.local.sops.bin,
+# colonne project = infra) : disque de rétention, destination des archives sur le
+# NFS, emplacement des dépôts voisins, DSN Resend dont deploy.sh dérive le secret
+# SMTP de Grafana. Ses copies de travail portent les mêmes valeurs que lui : un
+# « cp .env.local .env.local.sauvegarde » ne doit jamais pouvoir finir git add.
+/.env.local
+/.env.local.php
+/.env.local.sauvegarde*
+/.env.local.bak*
+/.env.*.local
+###< configuration propre à la machine ###
+
+###> accès local aux consoles (non versionné) ###
+# De la configuration par machine, pas un secret (vérifié : aucun nom de
+# variable de type mot de passe/token/secret n'y apparaît) : réserves CPU/RAM,
+# disques de rétention, labels « tls.certresolver » vidés. Modèle versionné :
+# compose.override.yaml.example.
+/compose.override.yaml
+###< accès local aux consoles ###
+
+###> clés internes de la console de sauvegarde ###
+# ENCRYPTION_KEY, BETTER_AUTH_SECRET et le compte administrateur, lus par
+# « env_file » du service dbackup (gabarit : docker/legacy/dbackup.env.example).
+# Le fichier n'est lu que par le démon docker, jamais par un processus du
+# conteneur : il peut rester fermé (0600) et hors git.
+/docker/legacy/dbackup.env
+###< clés internes de la console de sauvegarde ###
+
+###> identifiants MaxMind (geoipupdate) ###
+# GEOIPUPDATE_ACCOUNT_ID et GEOIPUPDATE_LICENSE_KEY, lus par « env_file » du
+# service geoipupdate (gabarit : docker/legacy/geoip.env.example). Même régime
+# que dbackup.env : scellé dans deploy/secrets/geoip.sops.bin, matérialisé à
+# chaque déploiement par deploy.sh, jamais versionné en clair.
+/docker/legacy/geoip.env
+###< identifiants MaxMind ###
+
+###> comptes basicauth Traefik (chiffrés dans le coffre) ###
+# Hashs bcrypt lus par les middlewares basicauth (dagu, grafana, dbackup,
+# tableau de bord, rac). Le clair ne voyage pas dans git : il est scellé dans
+# deploy/secrets/htpasswd_*.sops.bin et reposé par deploy.sh, comme
+# docker/legacy/dbackup.env. Poser le compte à la main sur le serveur ne
+# survivait ni à un « git clean -fd » ni à un re-déploiement depuis zéro, et
+# rendait l'équipe dépendante de la mémoire de celui qui l'avait créé.
+# Le motif « * » (et non « / ») est ce qui permet de laisser passer le gabarit :
+# git ne descend pas dans un répertoire exclu, donc « !/dossier/fichier » ne
+# fonctionnerait pas avec un « /docker/…/htpasswd/ » tout court.
+/docker/traefik/htpasswd/*
+!/docker/traefik/htpasswd/*.example
+###< comptes basicauth Traefik ###
+
+###> TLS local de l'infrastructure ###
+# Autorité de développement et certificats auto-signés régénérés par
+# docker/traefik/generate-cert.sh. Ils couvrent les noms réels (grafana…,
+# backups…, traefik…) avec la clé privée correspondante : rien à versionner,
+# rien à sauvegarder — le poste les recrée en une commande.
+/docker/traefik/certs/
+###< TLS local ###
+
+###> secrets générés sur la machine, hors coffre ###
+# Mot de passe d'administration Grafana (posé par
+# tools/logging/bootstrap-grafana-admin.sh) et mot de passe SMTP dérivé par
+# deploy.sh du DSN Resend : deux fichiers 0640 root:472 que Compose monte sous
+# /run/secrets. Leur rejouer n'aurait aucun effet sur Grafana (la base a déjà
+# son compte) et une copie dans git serait un secret en clair — voir le bloc
+# final de deploy/secrets.manifest.
+/docker/grafana/secrets/
+###< secrets générés ###
+
+###> sauvegardes locales ###
+# Les trois chemins où la console écrit quand aucune valeur machine n'est
+# déclarée : destination des archives (DBACKUP_DEST_HOST_PATH), atelier de
+# restauration (DBACKUP_RESTORE_HOST_PATH), atterrissage des mariabackup
+# (MARIADB_BACKUP_HOST_PATH). Sur une machine, ils désignent le NFS et ces
+# dossiers ne servent pas ; sur un poste de développement, ils peuvent porter
+# des données réelles téléchargées d'un scellement.
+# Le motif « ** » exclut le contenu, les lignes « ! » laissent passer les
+# répertoires et leurs marqueurs .gitkeep : c'est ce qui fait exister
+# l'arborescence après un clone neuf, sans jamais y engager un fichier produit.
+/backup/archives/**
+!/backup/archives/**/
+!/backup/archives/**/.gitkeep
+/backup/restore/**
+!/backup/restore/**/
+!/backup/restore/**/.gitkeep
+/backup/mariadb/**
+!/backup/mariadb/**/
+!/backup/mariadb/**/.gitkeep
+/backup/db/**
+!/backup/db/**/
+!/backup/db/**/.gitkeep
+###< sauvegardes locales ###
+
+###> disque de rétention de la pile de logs ###
+# Repli du poste de développement quand LOGGING_HOST_DATA_PATH n'est pas
+# neutralisé par compose.override.yaml : les chunks Loki, la base SQLite Grafana
+# et le TSDB Prometheus écriraient ici. Jamais un fichier de données dans git.
+/data/logging/
+###< disque de rétention ###
+
+###> coffre à secrets (SOPS + Age) ###
+# La clé privée age est le seul objet qui donne accès à la production. Elle n'a
+# rien à faire dans le dépôt, même par un « git add -A » pressé : aucun fichier
+# suivi ne s'appelle keys.txt (vérifié), donc la règle est prise large.
+keys.txt
+/age-private-key*
+*SOPS_AGE_KEY*
+# Résidus d'un sceau interrompu : mktemp crée des .tmp.XXXXXX à côté du bloc.
+/deploy/secrets/*.tmp.*
+# Les fichiers clairs que le coffre matérialise au pied de CE dépôt, si un
+# déploiement local les écrit ici plutôt que dans le dépôt concerné : garde-fou,
+# pas emplacement attendu.
+/docker/legacy/credentials.env
+###< coffre à secrets ###
+
+###> clés SSH et configuration de la récupération MariaDB ###
+# Clé privée générée par tools/backup/generate-ssh-key.sh pour le DAG
+# « mariadb_fetch » : accès root au serveur MariaDB de production. Elle n'est
+# pas scellée dans le coffre (elle se régénère) et ne doit en aucun cas être
+# committée, où qu'elle soit posée sur la machine.
+/deploy/secrets/id_rsa_mariadb
+/deploy/secrets/id_rsa_mariadb.pub
+# Configuration de la récupération SSH (variables d'environnement) : les valeurs
+# vivent dans docker/legacy/credentials.env (dépôt du site), un .env local posé
+# dans tools/backup contiendrait les mêmes.
+/tools/backup/.env
+###< clés SSH ###
+
+###> artefacts régénérés ###
+node_modules/
+*.log
+###< artefacts régénérés ###

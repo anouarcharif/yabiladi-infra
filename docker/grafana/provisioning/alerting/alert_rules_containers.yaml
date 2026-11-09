@@ -1,0 +1,557 @@
+apiVersion: 1
+
+# Alertes sur l'arrêt de conteneurs.
+#
+# UNE RÈGLE PAR CONTENEUR CRITIQUE (php, nginx, traefik, dagu, loki,
+# postfix, facturation, mediakit) : l'alerte nomme explicitement le conteneur
+# down, pas besoin d'ouvrir le dashboard pour savoir lequel. Le détecteur
+# global « baisse anormale » a été retiré : une alerte agrégée ne nomme pas le
+# conteneur et se déclenchait sur la moindre instabilité de cAdvisor. Ses deux
+# UID survivants sont supprimés par « deleteRules » ci-dessous.
+#
+# PRINCIPE. cAdvisor expose container_last_seen pour chaque conteneur : un
+# timestamp Unix de la dernière fois où le conteneur a été vu. Si un conteneur
+# s'arrête (crash, docker stop, OOM kill), sa série disparaît après deux
+# housekeepings de cAdvisor (15 s × 2 = 30 s, arrondi à 60 s par sécurité).
+#
+# POURQUOI 2 MINUTES DE for:. Un docker restart ou un déploiement Compose
+# arrête les conteneurs pendant 10-30 secondes. Deux minutes filtrent ces
+# arrêts volontaires courts. Un crash réel ou un docker stop oublié dure
+# plus longtemps.
+#
+# NE PAS RECOPIER « instance="$serveur" » ICI. C'est une variable de
+# tableau de bord : le frontend la résout pour un panneau, jamais pour une
+# règle d'alerte. Écrite telle quelle, la chaîne part littéralement chez
+# Prometheus, ne matche aucune série (le label vaut « yabiladi ») et la règle
+# annonce l'arrêt de TOUS les conteneurs. Constaté le 2026-11-09 sur les dix
+# règles ci-dessous, toutes en Alerting alors que la pile tournait : la même
+# requête lancée à la main renvoyait 0 avec « $serveur » et 1 avec le bon
+# label. On filtre donc par « job="docker" », l'étiquette posée par le scrape
+# de docker/prometheus.yml : elle ne duplique pas le nom d'hôte qui y est
+# écrit en dur, et elle reste vraie si LOG_HOSTNAME change.
+#
+# LE DOSSIER. « Infrastructure » est créé par le fournisseur de tableaux de
+# bord (docker/grafana/provisioning/dashboards/logging.yaml).
+#
+# FANTÔMES. Le provisioning est un upsert, pas une synthèse (README, §
+# « Retirer un fichier ne retire pas ses règles ») : les règles « container-down »
+# et « container-mass-down », créées avant le découpage par conteneur, ont
+# survécu à leur retrait du fichier et continuaient d'alerter. « deleteRules »
+# les retire par le fichier ; vérifié le 2026-11-09 sur grafana/grafana:13.3.0 :
+# les deux UID ont disparu de /api/v1/provisioning/alert-rules après
+# redémarrage, sans toucher à la base.
+deleteRules:
+  - orgId: 1
+    uid: container-down
+  - orgId: 1
+    uid: container-mass-down
+
+groups:
+  - orgId: 1
+    name: sante-des-conteneurs
+    folder: 'Infrastructure'
+    interval: 1m
+    rules:
+      # ---------------------------------------------------------------------
+      # Règles par conteneur critique. Chaque règle nomme le conteneur dans
+      # le titre et les labels, donc le mail d'alerte dit lequel est down
+      # sans avoir à ouvrir Grafana.
+      # ---------------------------------------------------------------------
+      - uid: container-php-down
+        title: PHP-FPM arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="php"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: php
+        annotations:
+          summary: 'Conteneur PHP-FPM arrêté'
+          description: >-
+            Le conteneur php (Symfony PHP-FPM) n'est plus vu par cAdvisor depuis
+            plus de 2 minutes. Le site ne répond plus (502 Bad Gateway).
+            Vérifier : docker compose ps php ; docker compose logs --since 10m php.
+            Redémarrage : docker compose up -d php.
+
+      - uid: container-nginx-down
+        title: Nginx arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="nginx"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: nginx
+        annotations:
+          summary: 'Conteneur Nginx arrêté'
+          description: >-
+            Le conteneur nginx (reverse proxy) n'est plus vu par cAdvisor.
+            Tout le trafic HTTP est coupé. Vérifier : docker compose ps nginx ;
+            docker compose logs --since 10m nginx. Redémarrage : docker compose up -d nginx.
+
+      - uid: container-traefik-down
+        title: Traefik arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="traefik"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: traefik
+        annotations:
+          summary: 'Conteneur Traefik arrêté'
+          description: >-
+            Le conteneur traefik (edge router / TLS) n'est plus vu par cAdvisor.
+            Tout le trafic HTTPS est coupé. Vérifier : docker compose ps traefik ;
+            docker compose logs --since 10m traefik. Redémarrage : docker compose up -d traefik.
+
+      - uid: container-dagu-down
+        title: Dagu arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="dagu"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: dagu
+        annotations:
+          summary: 'Conteneur Dagu arrêté'
+          description: >-
+            Le conteneur dagu (orchestrateur de tâches) n'est plus vu par cAdvisor.
+            Les DAGs ne s'exécutent plus (newsletter, RSS, prières, radio).
+            Vérifier : docker compose ps dagu ; docker compose logs --since 10m dagu.
+            Redémarrage : docker compose up -d dagu.
+
+      - uid: container-loki-down
+        title: Loki arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="loki"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: loki
+        annotations:
+          summary: 'Conteneur Loki arrêté'
+          description: >-
+            Le conteneur loki (stockage de logs) n'est plus vu par cAdvisor.
+            Les dashboards Grafana basés sur Loki sont vides (accès, erreurs,
+            radio, emails). Les logs sont toujours écrits par Alloy mais non
+            indexés. Vérifier : docker compose ps loki ; docker compose logs --since 10m loki.
+            Redémarrage : docker compose up -d loki.
+
+      - uid: container-postfix-down
+        title: Postfix arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="postfix"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: postfix
+        annotations:
+          summary: 'Conteneur Postfix arrêté'
+          description: >-
+            Le conteneur postfix (relais SMTP) n'est plus vu par cAdvisor.
+            Les emails sortants sont en file d'attente (newsletter, alertes,
+            mot de passe oublié). Vérifier : docker compose ps postfix ;
+            docker compose logs --since 10m postfix. Redémarrage : docker compose up -d postfix.
+
+      - uid: container-facturation-php-down
+        title: Facturation PHP arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="facturation-php"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: facturation-php
+        annotations:
+          summary: 'Conteneur Facturation PHP arrêté'
+          description: >-
+            Le conteneur facturation-php n'est plus vu par cAdvisor.
+            L'application de facturation ne répond plus.
+            Vérifier : docker compose ps facturation-php ; docker compose logs --since 10m facturation-php.
+            Redémarrage : docker compose up -d facturation-php.
+
+      - uid: container-facturation-nginx-down
+        title: Facturation Nginx arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="facturation-nginx"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: facturation-nginx
+        annotations:
+          summary: 'Conteneur Facturation Nginx arrêté'
+          description: >-
+            Le conteneur facturation-nginx n'est plus vu par cAdvisor.
+            L'application de facturation ne répond plus (502 Bad Gateway).
+            Vérifier : docker compose ps facturation-nginx ; docker compose logs --since 10m facturation-nginx.
+            Redémarrage : docker compose up -d facturation-nginx.
+
+      - uid: container-mediakit-php-down
+        title: Mediakit PHP arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="mediakit-php"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: mediakit-php
+        annotations:
+          summary: 'Conteneur Mediakit PHP arrêté'
+          description: >-
+            Le conteneur mediakit-php n'est plus vu par cAdvisor.
+            L'application mediakit (pub.yabiladi.com) ne répond plus.
+            Vérifier : docker compose ps mediakit-php ; docker compose logs --since 10m mediakit-php.
+            Redémarrage : docker compose up -d mediakit-php.
+
+      - uid: container-mediakit-nginx-down
+        title: Mediakit Nginx arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="mediakit-nginx"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: mediakit-nginx
+        annotations:
+          summary: 'Conteneur Mediakit Nginx arrêté'
+          description: >-
+            Le conteneur mediakit-nginx n'est plus vu par cAdvisor.
+            L'application mediakit (pub.yabiladi.com) ne répond plus (502 Bad Gateway).
+            Vérifier : docker compose ps mediakit-nginx ; docker compose logs --since 10m mediakit-nginx.
+            Redémarrage : docker compose up -d mediakit-nginx.

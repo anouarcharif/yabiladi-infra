@@ -1,0 +1,275 @@
+// Centralisation des logs Docker vers Loki (mission 2026-10).
+//
+// Version du collecteur : image grafana/alloy:v1.21.3 (digest
+// sha256:8ab871206bd2d8f89277f53abffee5f452a293980788d52f85fa183a87a505a4, publié
+// le 2026-10-28). La syntaxe River ci-dessous est celle de cette version :
+//   - loki.source.docker prend `host` (singulier) et `targets`, PAS `unix_socket`
+//     ni `tail_from_beginning` (ces options viennent de Grafana Agent, mort) ;
+//   - `refresh_interval` de loki.source.docker est déprécié et sans effet :
+//     la fréquence de découverte appartient à discovery.docker ;
+//   - les blocs `wal { enabled = true }` de loki.write font échouer le
+//     chargement de la config depuis Alloy 1.21 sauf en --stability.level=
+//     experimental : aucun bloc wal ici.
+//
+// Le fichier est monté en lecture seule dans le conteneur ; recharger sans
+// redémarrer : docker compose exec alloy curl -X POST localhost:12345/-/reload
+// (12345 n'est jamais publié sur l'hôte, voir compose.yaml).
+
+// ---------------------------------------------------------------------------
+// 1. Découverte des conteneurs
+// ---------------------------------------------------------------------------
+// Un seul point d'entrée : l'API Docker lue sur le socket monté en lecture
+// seule. Toute la pile applicative tourne sur le réseau `app`, donc cette
+// découverte unique couvre php, nginx, traefik, dagu, dbackup et postfix :
+// il n'existe aucun second collecteur, d'où l'absence de doublons.
+// match_first_network (défaut true) évite une cible par réseau quand un
+// conteneur en occupe plusieurs.
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  // Un cycle de découverte par minute : les conteneurs recréés par un
+  // redéploiement sont rattrapés là, pas à chaque requête.
+  refresh_interval = "1m"
+}
+
+// ---------------------------------------------------------------------------
+// 2. Normalisation des labels : 5 labels stables, rien de plus
+// ---------------------------------------------------------------------------
+// Les labels Loki deviennent l'index TSDB : chaque valeur nouvelle crée des
+// séries. Ne sont conservés que `app`, `service`, `container`, `job`, `host`,
+// tous à cardinalité bornée par le nombre de conteneurs.
+// Sont exclus volontairement : id de conteneur (change à chaque recréation),
+// image (change à chaque build), réseaux, adresses IP, URL, user-agent,
+// requêtes, messages d'erreur.
+discovery.relabel "labels" {
+  targets = discovery.docker.containers.targets
+
+  // service <- label Compose réel posé par `docker compose` sur chaque
+  // conteneur. Après assainissement Docker, les points deviennent des
+  // underscores : com.docker.compose.service -> ..._label_com_docker_compose_service.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+    action        = "replace"
+  }
+
+  // container <- nom du conteneur ; l'API renvoie « /yabiladi-nginx-1 », le
+  // slash initial est retiré pour un label lisible.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    replacement   = "$1"
+    target_label  = "container"
+    action        = "replace"
+  }
+
+  // app <- l'application servie, une valeur par famille de conteneurs :
+  //   facturation : ws.yabiladi.com (facturation-php, facturation-nginx) ;
+  //   site        : le site public (php, nginx) ;
+  //   infra       : tout le reste (traefik, dagu, dbackup, postfix, radios…).
+  // C'est le sélecteur court demandé pour l'exploitation : {app="facturation"}
+  // isole l'intranet d'un coup, sans énumérer ses deux services. Les regex de
+  // relabel sont ancrées : « (php|nginx) » ne mord pas sur « facturation-php ».
+  rule {
+    source_labels = ["service"]
+    regex         = "facturation-(php|nginx)"
+    target_label  = "app"
+    replacement   = "facturation"
+    action        = "replace"
+  }
+  rule {
+    source_labels = ["service"]
+    regex         = "(php|nginx)"
+    target_label  = "app"
+    replacement   = "site"
+    action        = "replace"
+  }
+  // Dernière règle : tout ce qui n'a pas encore d'« app » est de
+  // l'infrastructure. Le label reste donc présent partout — un tableau qui
+  // filtre sur {app=~".*"} garde l'historique antérieur à ce label.
+  rule {
+    source_labels = ["app"]
+    regex         = "^$"
+    target_label  = "app"
+    replacement   = "infra"
+    action        = "replace"
+  }
+
+  // job et host : valeurs constantes pour ce serveur, pour les requêtes
+  // globales et les filtres Grafana.
+  rule {
+    target_label = "job"
+    replacement  = "docker"
+    action       = "replace"
+  }
+  rule {
+    target_label = "host"
+    replacement  = sys.env("HOSTNAME")
+    action       = "replace"
+  }
+
+  // La pile de logs est collectée, mais filtrée à part (voir plus bas
+  // « discovery.relabel.stack ») : sans ce filtre séparé, les journaux de
+  // Loki — très verbeux, une ligne par requête — retourneraient dans Loki.
+
+  // Sans nom de service Compose = conteneur hors stack (un autre projet, un
+  // conteneur perdu) : on ne l'indexe pas avec un label vide.
+  rule {
+    source_labels = ["service"]
+    regex         = "^$"
+    action        = "drop"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Collecte stdout/stderr
+// ---------------------------------------------------------------------------
+// Deux ensembles disjoints, donc aucune ligne collectée deux fois :
+//   - « apps » : php, nginx, traefik, dagu, dbackup — tout, c'est le besoin
+//     opérationnel demandé par la mission ;
+//   - « stack » : loki, alloy, grafana et les trois conteneurs de mesures
+//     (prometheus, node-exporter, cadvisor) — uniquement leurs lignes d'erreur
+//     et d'avertissement, pour le dashboard de santé (§11.7). Le volume brut de
+//     ces services n'a rien à faire dans Loki : Loki journalise une ligne par
+//     requête reçue, donc se ré-ingérer soi-même entretiendrait une boucle de
+//     consommation ; et Prometheus, récolté toutes les 30 s par Grafana, est
+//     exactement dans le même cas.
+//
+// Les trois conteneurs de mesures sont entrés dans « stack » le 2026-11-04,
+// après mesure sur vingt minutes : cAdvisor écrit 2 015 lignes par demi-heure
+// (« Cannot read smaps files for any PID from CONTAINER », répété à chaque
+// lecture de /proc d'un conteneur par le VM Docker), node_exporter 60 (le
+// listage de ses collecteurs au démarrage) et Prometheus 0 après son démarrage.
+// Laisser cAdvisor dans « apps » noierait le volume du dashboard de logs pour
+// une ligne qu'aucun exploitant ne peut corriger ; son vrai signal
+// (« Failed to create fscollector », « unable to start container manager »)
+// reste conservé ici, ces lignes portant « Failed »/« error ».
+
+discovery.relabel "apps" {
+  targets = discovery.relabel.labels.output
+
+  rule {
+    source_labels = ["service"]
+    regex         = "(alloy|grafana|loki|prometheus|node-exporter|cadvisor)"
+    action        = "drop"
+  }
+}
+
+discovery.relabel "stack" {
+  targets = discovery.relabel.labels.output
+
+  // « keep » sur la première règle : tout ce qui n'est pas la pile de logs
+  // est écarté de cet ensemble.
+  rule {
+    source_labels = ["service"]
+    regex         = "(alloy|grafana|loki|prometheus|node-exporter|cadvisor)"
+    action        = "keep"
+  }
+}
+
+loki.source.docker "containers" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.apps.output
+
+  // Les offsets de lecture (positions) vivent dans le dossier de données du
+  // composant, lui-même sous --storage.path=/var/lib/alloy/data, monté en
+  // volume nommé : après un redémarrage, la reprise se fait à l'octet déjà
+  // envoyé, donc ni log perdu ni log doublonné.
+  forward_to = [loki.process.clean.receiver]
+}
+
+loki.source.docker "stack" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.stack.output
+
+  forward_to = [loki.process.stack_noise.receiver]
+}
+
+// Le sélecteur utilise `!~` : ce sont les lignes QUI NE CONTIENNENT PAS un mot
+// clé du listage qui sont sélectionnées, puis jetées. Les lignes conservées
+// restent inchangées.
+// Liste volontairement courte : deux familles seulement, les anomalies (le
+// besoin opérationnel) et les marques de démarrage/arrêt (sinon le panneau
+// « Derniers événements de démarrage et d'arrêt » du dashboard de santé ne
+// peut structurellement jamais afficher quoi que ce soit, ces lignes étant
+// de niveau info).
+loki.process "stack_noise" {
+  forward_to = [loki.process.clean.receiver]
+
+  stage.match {
+    selector = "{service=~\"alloy|grafana|loki|prometheus|node-exporter|cadvisor\"} !~ \"(?i)(error|warn|fail|panic|fatal|no space|started|starting|running|shutdown|sigterm)\""
+
+    // « expression » est obligatoire dans stage.drop (le stage refuse un bloc
+    // vide) : ".+" correspond toute ligne, donc tout ce que le sélecteur a
+    // sélectionné — les lignes normales — est jeté.
+    stage.drop {
+      expression = ".+"
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Derrière, on ne laisse passer que les labels retenus
+// ---------------------------------------------------------------------------
+// Filet de sécurité : si l'API Docker ajoute un label interne, il ne part pas
+// dans Loki. loki.write écarte déjà les labels en `__`, mais les labels publics
+// non désirés, eux, passeraient.
+loki.process "clean" {
+  forward_to = [loki.write.loki.receiver]
+
+  stage.label_keep {
+    values = ["app", "service", "container", "job", "host"]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Envoi vers Loki
+// ---------------------------------------------------------------------------
+// Loki tourne en mode monolithique sans tenant : `auth_enabled: false` côté
+// Loki signifie qu'il ne faut PAS envoyer d'en-tête X-Scope-OrgID, donc aucun
+// `tenant_id` ici.
+// L'adresse reste interne au réseau `logging` : ni Loki ni ce port ne sont
+// publiés sur l'hôte.
+loki.write "loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+
+    // Regroupage : moins de requêtes HTTP vers Loki = moins de CPU des deux
+    // côtés. retry_on_http_429 (défaut true) respecte les limitations
+    // d'ingestion posées dans la config Loki.
+    batch_size          = "512KiB"
+    batch_wait          = "2s"
+    remote_timeout      = "15s"
+    min_backoff_period  = "500ms"
+    max_backoff_period  = "2m"
+    max_backoff_retries = 5
+  }
+
+  // Un seul destinataire, une seule file : le plafond de 0,5 CPU d'Alloy ne
+  // doit pas être consommé par du parallélisme inutile.
+  max_streams = 0
+}
+
+// ---------------------------------------------------------------------------
+// Note — masquage des secrets (optionnel, non activé)
+// ---------------------------------------------------------------------------
+// loki.secretfilter (GA depuis Alloy 1.20) masque les jetons détectés par
+// gitleaks. Il n'est PAS activé ici : il scanne chaque ligne, et sur les
+// access logs Nginx/Traefik de ce serveur c'est un coût CPU direct sur un
+// conteneur plafonné à 0,5 CPU.
+// La protection retenue est celle recommandée par la mission : masquer à la
+// source (les tokens ne doivent pas arriver dans stdout) et ne rien exposer
+// côté lecture — Grafana est derrière la double barrière Traefik, Loki n'est
+// pas joignable depuis Internet.
+// Si un masquage agent-side devient nécessaire, décommenter et fournir le
+// fichier de config gitleaks :
+//
+// loki.secretfilter "redact" {
+//   forward_to      = [loki.write.loki.receiver]
+//   gitleaks_config = "/etc/alloy/gitleaks.toml"
+//   redact_with     = "$SECRET_NAME_REDACTED"
+//   redact_percent  = 100
+//   rate            = 1.0
+// }
+//
+// et brancher loki.process.clean sur ce composant au lieu de loki.write.

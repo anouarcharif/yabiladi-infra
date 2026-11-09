@@ -1,0 +1,899 @@
+{
+  "uid": "yabiladi-dbackup-monitoring",
+  "title": "DBackup — sauvegardes",
+  "description": "Journal de DBackup (une ligne JSON par événement) : exécutions démarrées, fichiers refusés par la source, tâches du planificateur. Le succès d'une archive se lit dans l'interface, pas dans Loki.",
+  "tags": [
+    "yabiladi",
+    "loki",
+    "dbackup"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "",
+  "schemaVersion": 42,
+  "version": 0,
+  "id": null,
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {
+    "time_options": [
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "1d",
+      "7d",
+      "30d"
+    ]
+  },
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Conteneur",
+        "type": "query",
+        "hide": 0,
+        "skipUrlSync": false,
+        "datasource": {
+          "type": "loki",
+          "uid": "yabiladi-loki"
+        },
+        "query": {
+          "query": "label_values({service=\"dbackup\"}, container)",
+          "refId": "ContainerVariableQuery"
+        },
+        "definition": "label_values({service=\"dbackup\"}, container)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "allowCustomValue": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Lignes sur la période",
+      "description": "Tout le journal de la console sur la fenêtre choisie.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dbackup\", container=~\"$container\"} [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE LIGNE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Lignes d'erreur",
+      "description": "Niveau « error » du journal JSON : lecture refusée dans une source, écriture d'archive impossible, base injoignable.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dbackup\", container=~\"$container\"} |~ \"\\\"level\\\":\\\"error\\\"\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE ERREUR",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Exécutions démarrées",
+      "description": "« Starting execution » : un job a été pris en charge, planifié ou déclenché à la main. Ce n'est PAS la preuve d'une archive — voir « Règles de lecture ».",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dbackup\", container=~\"$container\"} |~ \"\\\"message\\\":\\\"Starting execution\\\"\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE EXÉCUTION",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Dépôts rafraîchis",
+      "description": "Après chaque écriture, la console recalcule l'inventaire du destinataire (fichiers et octets). Zéro sur la période = aucune archive produite.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"dbackup\", container=~\"$container\"} |~ \"\\\"message\\\":\\\"Storage statistics cache refreshed\\\"\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE ARCHIVE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Volume par niveau",
+      "description": "Le niveau est le champ « level » de chaque ligne JSON (info, warn, error).",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (lvl) (count_over_time({service=\"dbackup\", container=~\"$container\"} | regexp \"\\\"level\\\":\\\"(?P<lvl>[a-z]+)\\\"\" [$__auto]))",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "{{lvl}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Événements par message",
+      "description": "Le champ « message » de la console : Scheduler, Runner, Queue, Middleware y mélangent leurs lignes.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (msg) (topk(6, count_over_time({service=\"dbackup\", container=~\"$container\"} | regexp \"\\\"message\\\":\\\"(?P<msg>[^\\\"]{1,60})\\\"\" [$__auto])))",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "{{event}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Activité par module",
+      "description": "Le bloc contextuel nomme l'émetteur : « module » (Scheduler, Runner, Queue, Middleware), « service » (SystemTaskService, StorageStatsCache) ou « adapter » (local-filesystem, mariadb).",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (mod) (count_over_time({service=\"dbackup\", container=~\"$container\"} | regexp \"\\\"(?:module|service|adapter)\\\":\\\"(?P<mod>[A-Za-z._-]+)\\\"\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{task}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Erreurs par émetteur",
+      "description": "Quel module ou adaptateur produit les lignes d'erreur.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (mod) (count_over_time({service=\"dbackup\", container=~\"$container\"} |~ \"\\\"level\\\":\\\"error\\\"\" | regexp \"\\\"(?:module|service|adapter)\\\":\\\"(?P<mod>[A-Za-z._-]+)\\\"\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{task}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Échecs de sauvegarde",
+      "description": "Chaque « Local download failed » est un fichier que la source refuse au compte de la console : l'archive est produite mais marquée « partiel ». La liste des fichiers non lisibles est dans la discussion de deploy.sh (open_acme_to_backup).",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"dbackup\", container=~\"$container\"} |~ \"\\\"level\\\":\\\"error\\\"\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Exécutions",
+      "description": "Mise en file (Enqueuing job), départ (Starting execution) et fin de tâche système.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"dbackup\", container=~\"$container\"} |~ \"\\\"message\\\":\\\"(Enqueuing job|Starting execution|Running system task)\\\"\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 50,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Rétention et espace de l'archive",
+      "description": "Inventaire recalculé du destinataire : fichiers et octets vus après chaque job.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"dbackup\", container=~\"$container\"} |~ \"\\\"message\\\":\\\"Storage statistics cache refreshed\\\"\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 50,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Planification et tâches système",
+      "description": "L'ordonnanceur interne de la console (pas Dagu) : rechargement des jobs, comptage des jobs activés, tâches système périodiques.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"dbackup\", container=~\"$container\"} |~ \"\\\"module\\\":\\\"Scheduler\\\"\" |~ \"\\\"message\\\":\\\"\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      }
+    },
+    {
+      "type": "text",
+      "title": "Règles de lecture",
+      "description": "",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "options": {
+        "content": "## Règles de lecture\n\n— **une exécution n'est pas une sauvegarde** : la console écrit « Starting execution » puis se tait. Le statut\n  d'une archive se lit sur l'écran *Executions* de `backups.yabiladi.com` (ou `GET /api/executions/{id}`) :\n  `Success`, `Partial` ou `Failed`. **`Partial` veut dire archive tronquée**, pas archive ratée ;\n— une ligne `\"level\":\"error\"` avec `\"message\":\"Local download failed\"` nomme le fichier que la source\n  a refusé. C'est le signal à surveiller chaque matin : le job reste `Partial` tant qu'une donnée du\n  périmètre n'est pas lisible par le compte de la console ;\n— **aucune ligne ne prouve le succès** : ne jamais déduire un succès du silence dans Loki ;\n— tant que le job n'a pas de profil de chiffrement (à créer dans l'interface, l'API refuse),\n  les archives sont des TAR **en clair** sur le dépôt : le périmètre contient acme.json, les clés\n  TLS de docker/traefik/certs et des « .env » de scripts legacy. L'amorçage le redit à chaque\n  déploiement par une ligne « ATTENTION » ;\n— le journal est du JSON, une ligne par événement (`level`, `message`, `timestamp`, `context`) ; les\n  lignes `[Server]` et `Next.js` ne sont pas du JSON et ne portent pas de niveau ;\n— les journaux ne contiennent **ni mot de passe, ni clé de session, ni contenu des archives** ; les clés\n  de la console restent dans `docker/legacy/dbackup.env` (scellé dans le coffre) ;\n— l'**espace libre du dépôt** (le NFS `DBACKUP_DEST_HOST_PATH`) et la **rétention appliquée** (politique\n  « Smart GFS 7/4/12/2 » par job) ne se lisent pas ici : le premier sur le serveur, la seconde dans\n  l'interface de la console.",
+        "mode": "markdown"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      }
+    }
+  ]
+}

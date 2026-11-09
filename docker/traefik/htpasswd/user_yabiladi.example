@@ -1,0 +1,20 @@
+# Gabarit du compte partagé par Dagu, Grafana, la console de sauvegarde et le tableau de bord
+# Traefik — les quatre middlewares dont le « basicauth.usersfile » vaut
+# /etc/traefik/htpasswd/user_yabiladi dans compose.yaml.
+#
+# Le vrai fichier ne se versionne pas : il est scellé chiffré dans
+# deploy/secrets/htpasswd_user_yabiladi.sops.bin et reposé par deploy.sh, comme
+# docker/legacy/credentials.env. Le parcours complet :
+#
+#   bash docker/traefik/generate-htpasswd.sh user_yabiladi <compte> <motdepasse>
+#   ./deploy.sh --encrypt
+#   git add deploy/secrets/htpasswd_user_yabiladi.sops.bin && git commit && git push
+#   # puis, sur le serveur : ./deploy.sh  (matérialise le compte avant « up -d »)
+#
+# Une ligne par compte, au format « nom:hash ». Traefik v3 n'accepte que bcrypt
+# ($2y$) : un MD5 ou un apr1 d'un .htpasswd Apache est refusé en silence, et
+# alors aucun mot de passe ne passe. La ligne ci-dessous est inoffensive — le
+# mot de passe correspondant n'est pas un accès, c'est le texte littéral
+# « gabarit-inutilisable », et elle reste de toute façon dans un *.example que
+# Traefik ne lit pas.
+compte-a-remplacer:$2y$05$biTVv5TThaKyqmIZeB5Vyelv5Rw5YZjgTBxNcRqRoKu7nKMQy7t1y

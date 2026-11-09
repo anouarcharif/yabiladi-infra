@@ -1,0 +1,67 @@
+apiVersion: 1
+
+# Politique de notification provisionnée.
+#
+# Ce fichier PREND LA MAIN sur la politique par défaut de Grafana : la clé «
+# policies » sans « matchers » définit la racine, donc toute règle créée plus
+# tard dans d'autres dossiers héritera du récepteur racine ci-dessous. C'est
+# voulu (le seul alerting provisionné aujourd'hui est celui des antennes), mais
+# c'est aussi la raison pour laquelle la ligne « routes » existe : le jour où
+# l'équipe site ajoute des règles PHP/Nginx, elle ajoutera sa route ici plutôt
+# que de laisser ses alertes partir vers le destinataire Radio.
+#
+# Les trois réglages de tempo sont des choix d'exploitation, pas des défauts :
+#   - group_wait 30 s : le temps que les quatre règles de battement montent
+#     ensemble si c'est le conteneur de logs qui est mort, pour un seul mail au
+#     lieu de quatre à trente secondes d'écart ;
+#   - group_interval 5 m : une alerte du même groupe arrivée après coup part
+#     dans un second mail, pas dans le premier (qui est déjà en route) ;
+#   - repeat_interval : une panne non résolue doit revenir, sinon la
+#     notification unique se noie dans la journée. Une heure pour le critique,
+#     douze pour l'avertissement.
+policies:
+  - orgId: 1
+    receiver: yabiladi-radio-alertes
+    # Groupe par « alertname » uniquement : les quatre règles de battement ont
+    # chacune leur nom (donc un mail par antenne), et les règles qui portent sur
+    # les quatre à la fois regroupent leurs instances par le label « service »
+    # que LogQL rend — trois antennes muettes partent dans un seul message, pas
+    # trois. Ajouter « station » ici en séparait de toute façon une partie (ce
+    # label n'existe que sur les règles par antenne).
+    group_by:
+      - alertname
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 6h
+    routes:
+      # Les règles « Emails sortants » (alert_rules_email.yaml). Route
+      # distincte de celles qui suivent, et placée avant, pour deux raisons :
+      #  - la cadence n'est pas celle d'une antenne. Une rafale de rebonds dure
+      #    le temps d'un lot (newsletter de 06:40, envoi de masse) ; quatre
+      #    heures avant de la rappeler suffisent, là où une antenne muette doit
+      #    revenir toutes les heures ;
+      #  - la politique racine est aujourd'hui le récepteur Radio (seule adresse
+      #    configurée). Cette route nomme le cas « email » : le jour où un
+      #    contact point dédié existe, seule cette ligne change, et les alertes
+      #    radio ne bougent pas.
+      # Le nom du récepteur reste celui du contact point existant : il n'y a
+      # qu'une adresse, et deux entrées pour la même boîte compliqueraient la
+      # relecture sans rien apporter.
+      - matchers:
+          - "team=\"email\""
+        receiver: yabiladi-radio-alertes
+        group_wait: 30s
+        group_interval: 10m
+        repeat_interval: 4h
+      - matchers:
+          - "severity=\"critical\""
+        receiver: yabiladi-radio-alertes
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 1h
+      - matchers:
+          - "severity=\"warning\""
+        receiver: yabiladi-radio-alertes
+        group_wait: 1m
+        group_interval: 10m
+        repeat_interval: 12h

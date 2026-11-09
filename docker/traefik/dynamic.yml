@@ -1,0 +1,8 @@
+# Autorité de développement : certificat auto-signé couvrant les noms réels du
+# site et des interfaces (liste dans docker/traefik/generate-cert.sh). Les
+# routeurs gardent ces noms en production, où le certificat vient alors du
+# résolveur ACME ; ce fichier n'a plus d'effet dès qu'un routeur le référence.
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/yabiladi.com.crt
+      keyFile: /etc/traefik/certs/yabiladi.com.key

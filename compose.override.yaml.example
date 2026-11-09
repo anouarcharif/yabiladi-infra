@@ -1,0 +1,181 @@
+# Modèle du fichier de calibrage propre à une machine — INFRASTRUCTURE.
+#
+# À copier en « compose.override.yaml » (ignoré par git) puis à ajuster. Ce
+# fichier est nécessaire parce que Docker Compose n'interpole les valeurs que
+# depuis son .env versionné et depuis l'environnement du shell : ce qui est posé
+# dans .env.local est silencieusement ignoré à la création des conteneurs (vérifié
+# avec « docker compose config »). Le réglage d'une machine a donc sa place ici,
+# pas dans un fichier versionné — et surtout pas dans le .env, qui doit rester
+# la vérité du serveur pour que le déploiement se fasse sans retouche.
+#
+# Deux choses se règlent ici, et rien d'autre :
+#   1. les labels « tls.certresolver », vidés sur un poste qui ne peut pas
+#      prouver un nom public auprès de Let's Encrypt ;
+#   2. les montages de la pile de mesure, quand le NVMe de rétention du serveur
+#      n'existe pas sur la machine.
+#
+# Les valeurs ci-dessous sont celles d'un poste de développement (Windows +
+# Docker Desktop/WSL2, projet monté en 9p, disque du VM presque plein). Un
+# serveur Debian ne charge pas ce fichier : ses valeurs sont déjà dans
+# compose.yaml et .env.
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # TLS : le résolveur ACME se neutralise, il ne se discute pas.
+  #
+  # compose.yaml porte le résolveur du serveur dans le fichier versionné : sur
+  # la cible, le certificat est demandé au premier « up -d », sans ligne à
+  # ajouter à la main. Ici, les noms publics pointent sur le serveur et Let's
+  # Encrypt ne peut rien valider depuis ce poste — le label est donc VIDÉ, et
+  # Traefik retombe sur le certificat auto-signé de docker/traefik/dynamic.yml.
+  # Mesuré le 2026-10-30 : le routeur reste actif, /api/http/routers ne montre
+  # aucun champ « certResolver » et aucun log ACME n'apparaît — un label vide
+  # équivaut bien à son absence, pas à une erreur de configuration.
+  # ---------------------------------------------------------------------------
+  traefik:
+    labels:
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver="
+
+  grafana:
+    labels:
+      - "traefik.http.routers.grafana.tls.certresolver="
+    # « !override » : la liste est REMPLACÉE, pas ajoutée. Compose fusionne les
+    # montages par destination, mais sur une séquence il écrit la liste entière —
+    # répéter les deux lignes montantes (provisionnement, dashboards) est donc
+    # obligatoire, sinon la seule mention du volume nommé ferait disparaître les
+    # panneaux et les règles d'alerte versionnés.
+    volumes: !override
+      # Le bind de LOGGING_HOST_DATA_PATH (/data/logging) n'existe pas sur ce
+      # poste, et sa racine inventée par Docker appartiendrait au démon, pas à
+      # l'UID 472 du conteneur : « cannot open the database file ». Un volume
+      # nommé règle les deux.
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  dbackup:
+    labels:
+      - "traefik.http.routers.dbackup.tls.certresolver="
+
+  # ---------------------------------------------------------------------------
+  # Déplacement des données de la pile de mesure sur le stockage du VM Docker
+  # (ext4) au lieu de C:\ (9p). Ce n'est pas une préférence de confort : mesuré
+  # le 2026-10-29, Loki lit l'espace disque de son répertoire /loki pour sa
+  # protection WAL, le montage 9p lui rapporte l'usage de C:\ (94,81 % > seuil de
+  # 90 %), et l'ingester se coupe — « Ingester is shutting down » — alors que
+  # /ready répond 200 et que les POST /push renvoient 204. Le collecteur croit
+  # envoyer, Loki accepte, rien n'est stocké.
+  #
+  # Sur le serveur Debian, /data/logging est un vrai système de fichiers NVMe :
+  # la protection fonctionne comme prévu et reste utile. Ce contournement est
+  # donc local au poste de développement, et il n'y a rien à reporter en
+  # production.
+  #
+  # « docker compose down -v » purgerait ces trois volumes (et aussi
+  # yabiladi_traefik_acme, yabiladi_dbackup_data et yabiladi_alloy_data, qui
+  # portent le même nom physique que sur le serveur) : ne pas le faire à la
+  # légère.
+  # ---------------------------------------------------------------------------
+  loki:
+    volumes: !override
+      - loki_data:/loki
+      - ./docker/loki/config.yaml:/etc/loki/config.yaml:ro
+
+  # Même raison que pour loki juste au-dessus : le TSDB de Prometheus écrit son
+  # WAL et ses blocs sur le montage, et « /data/logging » n'existe pas sur ce
+  # poste — un bind dont la source est inventée par Docker atterrit sur le
+  # stockage de la VM, mais avec les droits de création du démon, pas ceux de
+  # nobody (65534) qui écrit ici. Le volume nommé évite les deux problèmes.
+  prometheus:
+    volumes: !override
+      - prometheus_data:/prometheus
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  # ---------------------------------------------------------------------------
+  # Mesures système : la propagation de montage est une exigence du serveur, PAS
+  # de ce poste.
+  #
+  # Docker Desktop (WSL2) refuse le démarrage avec
+  #   Error response from daemon: path / is mounted on / but it is not a
+  #   shared or slave mount
+  # parce que sa racine n'a aucune propagation. Sur Debian, systemd rend « / »
+  # partagé et le montage en « rslave » passe — et il est utile : sans
+  # réplication, ce que Docker monte après le démarrage du conteneur (un volume,
+  # un bind d'un service lancé plus tard) reste invisible au panneau disque.
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    volumes: !override
+      # La forme sans propagation, locale à ce poste.
+      - /:/host:ro
+    # « command » remplacé (et non ajouté) : Compose écrit la commande en entier,
+    # il faut donc répéter les quatre réglages du serveur et ajouter la seule
+    # exclusion propre à ce poste.
+    #
+    # Ce que la table de montage du VM Docker Desktop contient et que Debian ne
+    # contient pas : les redites de la racine du VM sous /parent-distro,
+    # /run/desktop et /var/lib, les bind mounts d'entrée de conteneur
+    # (/etc/hostname, /etc/hosts) et les montages d'outils du noyau WSL. Le
+    # collecteur filesystem les déclare comme des systèmes de fichiers à part
+    # entière, ext4 comme les vrais : mesuré le 2026-11-04, deux de ces faux
+    # montages (/parent-distro/usr/lib/linux-tools/…) étaient à 100 %, ce qui
+    # figeait le panneau « Disque — le plus rempli » sur 100 % et masquait la
+    # seule mesure qui compte ici, le disque de données du VM.
+    #
+    # Ces montages n'existant pas sur le serveur, l'exclusion reste locale à ce
+    # poste : la ligne « mount-points-exclude » du serveur garde la valeur par
+    # défaut du collecteur (sys, proc, dev, host, etc).
+    #
+    # Les « $$ » sont l'échappement Compose : sans eux, « docker compose »
+    # interpolerait les « $ » des ancres d'expressions régulières.
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|erofs|sysfs|tracefs|9p|virtiofs|fuse|tmpfs|ramfs|devtmpfs)$$
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|parent-distro|run|usr|var|mnt/wslg)(/.*|$$)
+      - --collector.netdev.device-exclude=^(lo|veth.*|br-.*|docker.*|virbr.*|tap.*|cni.*|flannel.*|kube.*)$$
+      - --collector.tcpstat
+
+  # ---------------------------------------------------------------------------
+  # Ce qu'on ne règle qu'exceptionnellement, et pourquoi c'est commenté ici.
+  # ---------------------------------------------------------------------------
+
+  # postfix:
+  #   environment:
+  #     # HELO du relais : par défaut le nom que le PTR de l'IP sortante annonce
+  #     # (sur le serveur du V1, tarourt.yabiladi.com). Ne déclarer la clé que
+  #     # pour envoyer depuis une autre machine — un HELO qui ne correspond pas
+  #     # au PTR se fait refuser par le destinataire, et la file Postfix grossit
+  #     # sans que rien n'affiche d'erreur.
+  #     POSTFIX_MYHOSTNAME: <nom-dont-le-PTR-est-celui-de-l-ip>
+
+  # traefik:
+  #   ports:
+  #     # Publication sur toutes les interfaces : réservé à une machine qui doit
+  #     # servir le public. Sur un poste de développement, les 80/443 locaux
+  #     # suffisent, et « 0.0.0.0 » exposerait le proxy sur le réseau local.
+  #     - "80:80"
+  #     - "443:443"
+
+  # geoipupdate:
+  #   environment:
+  #     # Pour tester une autre édition que celle que lisent les compteurs
+  #     # d'audience radio. Le compte MaxMind (ACCOUNT_ID, LICENSE_KEY) ne se
+  #     # règle PAS ici : il vient de docker/legacy/credentials.env, et passer
+  #     # par « environment » l'écrirait dans un fichier versionné.
+  #     GEOIPUPDATE_EDITION_IDS: GeoLite2-City
+
+  # dbackup:
+  #   environment:
+  #     # Fuseau des planifications de jobs, si la machine n'est pas à l'heure
+  #     # du serveur. Les heures de fenêtre d'archive suivent cette valeur : la
+  #     # changer ne fait que déplacer les créneaux, pas accélérer la rotation.
+  #     TZ: Europe/Paris
+
+volumes:
+  # Noms volontairement SANS préfixe : ces trois volumes sont propres au poste
+  # de développement, Compose les crée sous le nom du projet (yabiladi-infra-…)
+  # et un « down -v » local ne touchera jamais les volumes réels du serveur, qui
+  # portent le nom physique « yabiladi_… » fixé dans compose.yaml.
+  loki_data:
+  grafana_data:
+  prometheus_data

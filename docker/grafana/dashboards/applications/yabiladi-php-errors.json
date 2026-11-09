@@ -1,0 +1,755 @@
+{
+  "uid": "yabiladi-php-errors",
+  "title": "PHP — erreurs applicatives",
+  "description": "Erreurs PHP remontées sur stderr par php-fpm (error_log = /proc/self/fd/2) et collectées par Alloy.",
+  "tags": [
+    "yabiladi",
+    "loki",
+    "php"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "",
+  "schemaVersion": 42,
+  "version": 0,
+  "id": null,
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {
+    "time_options": [
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "1d",
+      "7d",
+      "30d"
+    ]
+  },
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Conteneur",
+        "type": "query",
+        "hide": 0,
+        "skipUrlSync": false,
+        "datasource": {
+          "type": "loki",
+          "uid": "yabiladi-loki"
+        },
+        "query": "label_values({service=\"php\"}, container)",
+        "definition": "label_values({service=\"php\"}, container)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "allowCustomValue": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Lignes PHP sur la période",
+      "description": "Tout ce que php-fpm a écrit sur stderr.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"php\", container=~\"$container\"} [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "AUCUNE LIGNE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Erreurs fatales et exceptions",
+      "description": "Motifs « PHP Fatal error » et « Uncaught ».",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"php\", container=~\"$container\"} |~ \"PHP Fatal error|Uncaught\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Avertissements PHP",
+      "description": "« PHP Warning » : à surveiller, car le forum legacy en produit beaucoup et ils masquent parfois une vraie panne.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"php\", container=~\"$container\"} |~ \"PHP Warning\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Notices et erreurs de syntaxe",
+      "description": "« PHP Notice » et « PHP Parse error ».",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"php\", container=~\"$container\"} |~ \"PHP (Notice|Parse error)\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Volume d’erreurs PHP par type",
+      "description": "Type extrait du texte de la ligne (PHP Fatal error / Warning / Notice / Parse error). Le libellé exact vient du journal : rien n’est déduit.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind) (count_over_time({service=\"php\", container=~\"$container\"} | regexp \"(?P<kind>PHP (?:Fatal error|Warning|Notice|Parse error))\" [$__auto]))",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "{{kind}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Répartition par conteneur",
+      "description": "Le service php peut compter plusieurs conteneurs après un scale ou une recréation.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (container) (count_over_time({service=\"php\", container=~\"$container\"} |~ \"(?i)(error|fatal|critical|panic|exception|failed)\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{container}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Lignes par niveau détecté par Loki",
+      "description": "detected_level est calculé par Loki à la lecture, pas envoyé par le collecteur.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (detected_level) (count_over_time({service=\"php\", container=~\"$container\"} [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{detected_level}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Dernières erreurs fatales et exceptions",
+      "description": "Filtre « PHP Fatal error » ou « Uncaught ». Les traces de pile Symfony arrivent ligne par ligne : le pilote json-file de Docker découpe le bloc, la pile n’est donc pas continue dans Loki.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"php\", container=~\"$container\"} |~ \"PHP Fatal error|Uncaught\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Derniers avertissements",
+      "description": "« PHP Warning » et « PHP Notice », avec le fichier et la ligne quand le message les contient.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"php\", container=~\"$container\"} |~ \"PHP (Warning|Notice)\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Dernières lignes PHP",
+      "description": "Tout stderr de php-fpm sur la période, y compris les notices du forum legacy.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"php\", container=~\"$container\"}",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 200,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      }
+    },
+    {
+      "type": "text",
+      "title": "Limites connues",
+      "description": "",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "options": {
+        "content": "— les **traces de pile complètes** ne sont pas reconstructibles : un backtrace multi-lignes devient plusieurs lignes Loki distinctes ;\n— le **contexte Symfony** (array) n’est pas journalisé sur stderr en production, seule la ligne principale l’est ;\n— un `PHP Fatal error` **sans** `Uncaught` reste compté ; l’inverse aussi.\nVoir docs/logging/README.md, section « Formats réels des journaux ».",
+        "mode": "markdown"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      }
+    }
+  ]
+}

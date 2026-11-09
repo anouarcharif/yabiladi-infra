@@ -1,0 +1,42 @@
+apiVersion: 1
+
+# Contact points provisionnés pour la supervision des quatre antennes radio.
+#
+# Un seul destinataire aujourd'hui : l'exploitant cité dans les règles
+# (docker/grafana/provisioning/alerting/alert_rules_radio.yaml). Ce fichier ne
+# contient aucun mot de passe — le transport SMTP est réglé dans compose.yaml
+# (GF_SMTP_*) : Resend via son relais authentifié (smtp.resend.com:587), le
+# mot de passe étant dérivé par deploy.sh depuis BOT_MONITOR_MAILER_DSN et
+# monté en secret Docker (/run/secrets/grafana_smtp_password).
+#
+# Deux choses à savoir, mesurées ici plutôt que supposées :
+#   - un contact point « email » sans GF_SMTP_ENABLED dans compose.yaml
+#     n'envoie RIEN : Grafana conserve la notification et ne dit pas non.
+#   - « singleEmail: false » (le défaut) fait un message par instance d'alerte.
+#     Choisi : quand deux antennes tombent, deux mails distincts valent mieux
+#     qu'un mail à rallonge dont la ligne sujette ne dit pas laquelle.
+#
+# LA FORME DU BLOCK. Mesuré sur grafana/grafana:13.3.0 : la clef « notifiers »
+# (celle des versions 10 et 11, encore recopiée dans beaucoup d'exemples) n'est
+# plus lue du tout — pas d'erreur, rien n'est provisionné, et la politique de
+# notification répond alors « receiver ... does not exist ». Depuis Grafana 12,
+# un contact point est une ENTREE nommée contenant une liste « receivers », et
+# c'est le « name » de l'entrée que « notification_policies.yaml » cite dans ses
+# « receiver: ». Le uid est posé en dur pour que le contact point soit
+# retrouvé par les API de contrôle plutôt que par son nom.
+#
+# « singleEmail » s'écrit sans guillemets. Les « settings » sont renvoyés au
+# modèle Go du canal sous forme de JSON : « "false" » (chaîne) fait échouer le
+# rechargement avec « cannot unmarshal string into Go struct field
+# Config.singleEmail of type bool », et le reload répond alors HTTP 500 — erreur
+# lisible dans « docker compose logs grafana », jamais dans l'interface.
+contactPoints:
+  - orgId: 1
+    name: yabiladi-radio-alertes
+    receivers:
+      - uid: yabiladi-radio-alertes
+        type: email
+        disableResolveMessage: false
+        settings:
+          addresses: anouar@yabiladi.com
+          singleEmail: false

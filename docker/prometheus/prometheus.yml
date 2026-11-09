@@ -1,0 +1,114 @@
+# Configuration de Prometheus pour la pile de supervision Yabiladi.
+#
+# Une seule identité pour la machine : « yabiladi », la valeur que Alloy pose
+# déjà sur chaque ligne de log sous le label « host » (LOG_HOSTNAME dans .env,
+# « yabiladi » par défaut dans compose.yaml). Un opérateur qui compare une
+# courbe de CPU et un pic d'erreurs sur la même fenêtre lit le même nom dans les
+# deux systèmes.
+#
+# Ce nom est ÉCRIT en dur, et non repris d'une variable d'environnement, contre
+# la promesse de la documentation Prometheus. Elle annonce la substitution de
+# « ${var} » et « $var » dans les fichiers de configuration ; contrôlé le
+# 2026-11-04 avec v3.15.1 : les deux formes restent littérales dans les
+# étiquettes de « static_configs » — la cible charge « instance: ${LOG_HOST_ID} »
+# comme valeur, alors même que la variable est présente dans l'environnement du
+# conteneur. Il n'y a donc rien à configurer côté environnement : la valeur se
+# lit dans les séries, telle quelle.
+#
+# Ce que l'écriture en dur coûte, honnêtement : changer LOG_HOSTNAME sans
+# changer « instance » ici découple les deux piles (Loki dirait un nom,
+# Prometheus un autre) et le panneau « Démarré depuis » se vide sans lever
+# d'erreur — une étiquette qui ne matche rien n'est pas un échec. Les deux
+# valeurs se changent donc ensemble.
+#
+# Deux choix contre l'ordre naturel des choses, et les deux se discutent :
+#
+#   - « instance » est POSÉ ici au lieu de venir de l'adresse scrape. Par défaut
+#     Prometheus met « node-exporter:9100 » : le nom d'un conteneur, recréé à
+#     chaque déploiement, qui n'est pas le serveur. Un tableau qui groupe par
+#     « instance » verrait alors apparaître une nouvelle machine à chaque
+#     « up -d ». Contrepartie assumée : ce label ne dit plus par quel conteneur
+#     la mesure est passée — c'est le rôle de « job », et « docker compose ps »
+#     répond à cette question.
+#
+#   - aucun bloc « alerting: » ni « rule_files: ». Les règles vivent dans
+#     docker/grafana/provisioning/alerting, déjà branchées sur Postfix et sur le
+#     destinataire. Une seconde machine à notifier les mêmes séries produirait
+#     deux files de mails dont on ne sait pas laquelle fait foi.
+#
+# Le « $1 » d'un « replacement » plus bas n'est pas une référence
+# d'environnement : Prometheus l'interprète comme le groupe 1 du regex, et
+# rien ici ne l'intercepte. « promtool check config » ne signale au surplus
+# AUCUNE des substitutions ci-dessus : il valide une syntaxe, pas la sémantique
+# des étiquettes. Le seul contrôle qui vaille est la lecture réelle des séries
+# après démarrage, décrite dans docs/logging/README.md, § 8.1.
+#
+# Validation : « docker compose exec prometheus /bin/promtool check config
+# /etc/prometheus/prometheus.yml », puis le contrôle des expressions du tableau
+# de bord (§ 8.1).
+
+global:
+  # 30 s, et pas 15 : c'est le rafraîchissement le plus rapide que Grafana
+  # propose sur cette instance (GF_DASHBOARDS_MIN_REFRESH_INTERVAL=30s, posé
+  # dans compose.yaml pour ne pas tapiner Loki). Scrape plus serré que ce
+  # n'importe quel lecteur peut demander ne fait que consommer du CPU et de la
+  # place sur le NVMe.
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  # Aucune règle d'alerte n'est chargée ici, donc evaluation_interval ne sert
+  # rien de visible ; il reste explicite pour que la règle ajoutée un jour parte
+  # de la même période que le scrape — évaluée plus souvent, elle verrait des
+  # trous entre deux points.
+  evaluation_interval: 30s
+
+scrape_configs:
+  # La MACHINE : CPU, mémoire, charge, disque, réseau, connexions TCP.
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          instance: yabiladi
+
+  # Les CONTENEURS : CPU, mémoire working set, réseau, E/S, événements OOM.
+  #
+  # L'étiquette « service » est dérivée ici, pas collectée. Deux mesures prises
+  # le 2026-11-04 sur cAdvisor 0.60.6 l'imposent :
+  #   - la propagation des labels Docker (--store_container_labels=true, le
+  #     défaut) ajoute une centaine d'étiquettes « container_label_* » à CHAQUE
+  #     série, presque toutes vides — le nom du service y figure, noyé dans le
+  #     reste ;
+  #   - la liste blanche prévue pour ne garder que lui
+  #     (--whitelisted_container_labels=com.docker.compose.service:service avec
+  #     store_container_labels=false) n'a RIEN émis sur cette version : aucune
+  #     étiquette « service » sur les séries d'un conteneur Compose, vérifié sur
+  #     /metrics.
+  #
+  # Le nom du service se lit pourtant dans « name », que cAdvisor tient du démon
+  # Docker : Compose nomme chaque conteneur « <projet>-<service>-<numéro> ». Le
+  # préfixe du projet est donc coupé. Et « name » seul ne suffit pas : il porte
+  # le numéro de réplique et change à chaque recréation (« yabiladi-nginx-1 » →
+  # « -2 »), ce qui découperait l'histoire d'un service en une série par
+  # redéploiement. Le résultat porte exactement les mêmes valeurs que le label
+  # « service » d'Alloy dans Loki (« nginx », « php », « grafana ») : les deux
+  # piles nomment les services identiquement.
+  #
+  # « yabiladi- » est un nom de projet écrit en dur, comme le label
+  # « traefik.docker.network=yabiladi_app » de compose.yaml — il est fixé par
+  # « name: yabiladi » en tête de ce fichier. Le regex le rend OPTIONNEL, pour
+  # qu'un conteneur lancé hors de la stack (« factudb-1 », une sonde ponctuelle)
+  # reçoive tout de même une étiquette plutôt qu'aucune.
+  - job_name: docker
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          instance: yabiladi
+    metric_relabel_configs:
+      # « .+ » est gourmand : sur « yabiladi-mediakit-nginx-1 », le groupe 1
+      # capture « mediakit-nginx » (tout le nom Compose sauf le numéro), pas
+      # « nginx-1 ». Un nom sans suffixe numérique (« factudb ») ne matche pas
+      # et reste sans étiquette « service » : les panneaux groupés par service
+      # ignorent ce que la stack ne déclare pas, au lieu d'inventer un groupe.
+      - source_labels: [name]
+        regex: "^(?:yabiladi-)?(.+)-[0-9]+$"
+        target_label: service
+        replacement: "$1"

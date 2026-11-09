@@ -1,0 +1,32 @@
+# Source de données Loki provisionnée (Grafana 13.3.0, schéma vérifié sur la
+# documentation « Provision Grafana » et la page Loki > Configure).
+#
+# - access: proxy : Loki est une source serveur (backend) ; « direct » n'est pas
+#   utilisable ici, et le mode proxy est celui de tous les exemples officiels.
+# - uid figé : les dashboards provisionnés y font référence. Changer ce uid
+#   déconnecte les sept dashboards, donc il ne se touche qu'avec eux.
+# - url : adresse interne du réseau « logging ». Elle n'est jamais exposée, et
+#   Loki n'a pas d'authentification (mode monolithique single-tenant) : le
+#   secret n'a donc rien à faire dans ce fichier, et il n'y a pas de
+#   secureJsonData.
+# - aucun secret dans ce fichier, qui est versionné.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    uid: yabiladi-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    # timeout en secondes : au-delà, Grafana coupe la requête au lieu de
+    # laisser un conteneur plafonné à 1 CPU tourner dans le vide.
+    # maxLines borne ce qu'une requête « logs » ramène au navigateur, quel que
+    # soit le contenu du panneau.
+    jsonData:
+      timeout: 30
+      maxLines: 1000
+    # false : la source se relit dans ce fichier à chaque démarrage. Un
+    # changement fait dans l'UI serait écrasé au redéploiement, donc il ne doit
+    # pas être possible.
+    editable: false

@@ -1,0 +1,1297 @@
+{
+  "uid": "yabiladi-radio-sante",
+  "title": "Radio — santé des antennes",
+  "description": "État de service des quatre antennes SHOUTcast : battement, source, playlist, décodage, processus et capacité. Tout vient des journaux Loki (ScreenLog=1), rien du port 7.html. Les règles qui alertent par courriel sur anouar@yabiladi.com sont provisionnées en face, dans docker/grafana/provisioning/alerting/.",
+  "tags": [
+    "yabiladi",
+    "loki",
+    "radio"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "",
+  "schemaVersion": 42,
+  "version": 0,
+  "id": null,
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "1h"
+    ]
+  },
+  "links": [
+    {
+      "title": "Alertes Radio",
+      "type": "link",
+      "url": "/alerting/list?search=radio",
+      "targetBlank": false,
+      "icon": "external link",
+      "tooltip": "La liste des règles, leurs états et leur historique"
+    },
+    {
+      "title": "Audience",
+      "type": "link",
+      "url": "/d/yabiladi-radio-audience",
+      "targetBlank": false,
+      "icon": "doc",
+      "tooltip": "Le dashboard d'audience des quatre antennes"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "station",
+        "label": "Antenne",
+        "type": "query",
+        "hide": 0,
+        "skipUrlSync": false,
+        "datasource": {
+          "type": "loki",
+          "uid": "yabiladi-loki"
+        },
+        "query": "label_values({service=~\"radio-.+\"}, service)",
+        "definition": "label_values({service=~\"radio-.+\"}, service)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": "radio-.+",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "allowCustomValue": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Antennes vivantes (15 min)",
+      "description": "Toujours sur les quatre antennes, quelle que soit la sélection : ce nombre est le contrôle de présence, pas une vue filtrée. Il compte les services qui ont écrit au moins une ligne « [DECODE] Opened » dans les quinze dernières minutes. Rouge à 3, une antenne ne programme plus rien — mais Azawan et Nayda peuvent être légitimement arrêtées par la grille : vérifier la case du jour dans docker/radio/grid.yaml avant de courir.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "count(count by (service) (count_over_time({service=~\"radio-.+\"} |~ \"\\\\[DECODE\\\\] Opened\" [15m])))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 4
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "h": 6,
+        "w": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Fichiers ouverts (15 min)",
+      "description": "Total des lignes « [DECODE] Opened » des quatre antennes : le battement de sc_trans, une ligne par fichier engagé. En production, quatre antennes avec des morceaux de trois à quatre minutes donnent un ordre de grandeur de quelques dizaines ; un chiffre à plusieurs milliers (comme sur ce poste, où la discothèque de démonstration tient une seconde par fichier) veut dire que l'antenne avale ses fichiers sans les jouer — la règle du même nom est là pour ça.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=~\"radio-.+\"} |~ \"\\\\[DECODE\\\\] Opened\" [15m]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "h": 6,
+        "w": 8
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Incidents visibles (15 min)",
+      "description": "Comptage agrégé des six signes de panne : source coupée ou refusée, playlist à sec, fichier indécodable, processus mort ou abandonné par supervisord, auditeurs refusés. Zéro veut dire « rien dans les logs », pas « rien cassé » : le port qui répond reste le HEALTHCHECK du conteneur.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=~\"$station\"} |~ \"source disconnected|source rejected|Stream In Use|Ran out of songs|No entries found in playlist|Error opening decoder|nitializing encoder|Error in block selecting|exited: .*not expected|entered FATAL state|HTTP client connection rejected|Max users reached\" [15m]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "h": 6,
+        "w": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Battement : fichiers ouverts par antenne",
+      "description": "Le signal de vie, une ligne par fichier que sc_trans engage. Une courbe qui s'arrête net = l'antenne ne programme plus (plus de source, plus de playlist, plus de conteneur) ; la règle de battement alerte quinze minutes plus tard, ce panneau le montre avant. Les fenêtres font une minute : la valeur de l'ordonnée est bien un nombre de fichiers ouverts par minute.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "1m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"\\\\[DECODE\\\\] Opened\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "fichiers ouverts",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdLabels": {
+              "show": false
+            },
+            "thresholdStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "threshold": {
+            "style": "line",
+            "colorMode": "absolute",
+            "fill": false,
+            "mode": "dashed"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "h": 8,
+        "w": 12
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Toutes lignes confondues, par antenne",
+      "description": "Ce que Loki reçoit réellement, une ligne par ligne, quel que soit le programme. À lire avec le panneau de gauche : battement à zéro mais des lignes ici, l'antenne tourne et ne diffuse plus ; zéro partout, c'est le conteneur ou la collecte de journaux qui est mort — et dans ce cas tout ce dashboard devient blanc, y compris les tuiles du haut.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "1m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "lignes",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdLabels": {
+              "show": false
+            },
+            "thresholdStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "threshold": {
+            "style": "line",
+            "colorMode": "absolute",
+            "fill": false,
+            "mode": "dashed"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "h": 8,
+        "w": 12
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Source coupée ou refusée",
+      "description": "Désaccord entre le DNAS et sc_trans : « source disconnected », « source rejected », « Stream In Use », « Metadata update rejected ». Un reload planifié par la grille en produit un par antenne ; trois en un quart d'heure, c'est la règle « La source d'une antenne est coupée ou refusée ».",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"source disconnected|source rejected|Stream In Use|Metadata update rejected\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "événements",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "h": 8,
+        "w": 6
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Playlist à sec",
+      "description": "« [MAIN] Ran out of songs!!! », « No entries found in playlist! ABORTING » et les deux gardes-fous de l'entrée en matière du conteneur (« radio: 0 titre sur N lisibles sous /data/radio_content », « radio: X/Y titres de la playlist accessibles »). Ici, un seul événement compte : l'antenne n'a plus rien à jouer.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"Ran out of songs|No entries found in playlist|titre de la playlist accessibles|0 titre sur\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "événements",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 14,
+        "h": 8,
+        "w": 6
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Fichiers indécodables",
+      "description": "« Error opening decoder », « Error intializing encoder » (le binaire écrit ce motif sans le « i », le filtre non plus) et « Error in block selecting » : des morceaux tronqués ou dans un format que l'encodeur MP3 ne prend pas. L'antenne saute le fichier, l'auditeur entend une coupure.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"Error opening decoder|nitializing encoder|Error in block selecting\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "événements",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "h": 8,
+        "w": 6
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Auditeurs refusés",
+      "description": "« HTTP client connection rejected » et « Max users reached » : le DNAS ferme la porte au-delà de MaxUser (720 pour Yabiladi, Azawan, Nayda ; 200 pour Chaabi). Une panne ? Non, une capacité. La règle n'alerte qu'au-delà de trente refus par quart d'heure, pour ne pas signaler un robot poli.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"HTTP client connection rejected|Max users reached\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "refus",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 14,
+        "h": 8,
+        "w": 6
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "supervisord : sorties et renoncements",
+      "description": "« exited: … (not expected) » : le programme est mort et repart, la coupure dure quelques secondes. « gave up: … entered FATAL state » : supervisord renonce, l'antenne ne repartira plus toute seule. C'est ce que faisait chk_radio.py sur le serveur physique.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"exited: .*not expected|gave up: .*entered FATAL state\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "événements",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "h": 8,
+        "w": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "supervisord : redémarrages",
+      "description": "« entered RUNNING state », une ligne par lancement de programme — trois programmes par conteneur (sc_serv, sc_trans, radioctl). Comparer avec le panneau de gauche : des relances sans sortie inattendue, c'est la grille qui a rechargé la playlist, pas une panne.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"entered RUNNING state\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "lancements",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 22,
+        "h": 8,
+        "w": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Lignes du DNAS en ERROR, WARN, CRIT, FATAL",
+      "description": "Les niveaux que le DNAS pose lui-même dans sa sortie d'écran. Peu de lignes, mais c'est la seule vue sur les refus et les bannissements qu'il décide tout seul (liste de blocage, connexions abandonnées). À lire dans « Journal des pannes » juste en dessous.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (service) (count_over_time({service=~\"$station\"} |~ \"\\\\t(ERROR|WARN|CRIT|FATAL)\\\\t\" [$__interval]))",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{service}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "lignes",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 22,
+        "h": 8,
+        "w": 8
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Journal des pannes",
+      "description": "Les mêmes lignes que les six panneaux du haut, en texte intégral et horodatées : c'est ici qu'on lit le nom du fichier raté, le port de la source rejetée ou le code de sortie du programme mort. Vient de la sortie d'écran du DNAS et de sc_trans (ScreenLog=1), identique à « docker compose logs ».",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=~\"$station\"} |~ \"Ran out of songs|No entries found|Error opening|nitializing encoder|Error in block selecting|source disconnected|source rejected|Stream In Use|entered FATAL|not expected|Max users|connection rejected\"",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "h": 8,
+        "w": 12
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Garde-fous de la discothèque",
+      "description": "Ce que l'entrée en matière du conteneur et le générateur de playlist écrivent quand le disque ne correspond plus à la liste : « radio: 0 titre sur N lisibles sous /data/radio_content — discothèque mal montée ? », « radio: X/Y titres de la playlist accessibles », « … non inscriptible par uid … », « … absent, streamauthhash_1 non écrit », plus les traces Python d'un accès à la base qui a échoué.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=~\"$station\"} |~ \"titre de la playlist accessibles|0 titre sur|mal montée|illisible|injoignable|non inscriptible|manquante|streamauthhash|Traceback|MySQLdb|OperationalError\"",
+          "queryType": "range",
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 30,
+        "h": 8,
+        "w": 12
+      }
+    },
+    {
+      "type": "text",
+      "title": "Comment lire cette page",
+      "description": "Le mode d'emploi du health, y compris ce qu'il ne peut pas voir.",
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "h": 8,
+        "w": 24
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "## Que faire quand un mail d'alerte arrive\n\nLes deux liens en haut de page ouvrent la liste des règles (avec leurs états et leur historique) et le dashboard d'audience.\n\nLes règles vivent dans `docker/grafana/provisioning/alerting/alert_rules_radio.yaml` (dossier Radio, groupe `sante-des-antennes`, évaluation chaque minute). Le destinataire est `anouar@yabiladi.com`, réglé dans `contact_points.yaml` ; les tempos — 30 s d'attente pour le critique, 1 min pour l'avertissement, répétition toutes les 1 h / 12 h — sont dans `notification_policies.yaml`.\n\n1. **Le conteneur tourne-t-il ?** `docker compose ps radio-<station>` — la colonne `Health` vient du `7.html` du DNAS : `healthy` veut dire que le port répond et que `streamStatus` vaut 1. C'est le seul contrôle instantané de la chaîne ; les panneaux ci-dessus, eux, parlent à quinze minutes.\n2. **Que disait l'antenne avant de se taire ?** `docker compose logs --since 30m radio-<station>` ; ou ici même, le panneau « Journal des pannes » en filtrant sur l'antenne.\n3. **Le flux est-il vivant mais sans musique ?** « Antennes vivantes » à 4 et « Incidents visibles » à 0 avec un `streamStatus` à 1 = rien à jouer : la playlist ou la discothèque, pas le réseau.\n4. **Redémarrer proprement.** Lancer le DAG `radio-<station>` dans Dagu (il repositionne la playlist de la case en cours et recharge sc_trans). Le `POST /reload` du point de contrôle interne (port 9600) ne se déclenche pas à la main en production : il contourne la grille.\n\nUn doute sur un motif de log, une ligne qui manque ici : `ScreenLog=1` rend la sortie d'écran du DNAS dans Loki, donc `docker compose logs` et ces panneaux voient exactement la même chose."
+      }
+    }
+  ]
+}

@@ -1,0 +1,246 @@
+# Configuration Loki — image grafana/loki:3.7.9
+# (digest sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28).
+#
+# Cadre : un seul serveur, 8 Go de RAM, 1 CPU et 1 Go de mémoire comme plafonds
+# Docker pour ce conteneur, stockage local, rétention de 30 jours avec
+# suppression réelle des données expirées.
+#
+# Ce fichier est écrit clé par clé contre la référence de configuration Loki 3.7
+# et le code de la version 3.7.9, et pour une raison simple : Loki analyse ce
+# YAML avec « yaml.UnmarshalStrict ». UNE SEULE CLÉ INVENTÉE FAIT ÉCHOUER LE
+# DÉMARRAGE (« field <x> not found in type … »). Chaque clé est donc vérifiée,
+# et les pièges documentés ci-dessous sont tous réels :
+#
+#  1. L'image ne définit aucun -config.file par défaut exploitable : son CMD
+#     pointe sur /etc/loki/local-config.yaml (la config d'exemple du dépôt,
+#     sans rétention ni bornes). compose.yaml passe -config.file=/etc/loki/
+#     config.yaml, sinon CE FICHIER EST IGNORE.
+#  2. « retention_period: 720h » n'EFFACE RIEN tout seul : il faut
+#     compactor.retention_enabled: true. Et dès que cette option est vraie,
+#     Loki refuse de démarrer sans compactor.delete_request_store
+#     (« compactor.delete-request-store should be configured when retention is
+#     enabled », pkg/loki/modules.go) : la valeur est « filesystem » ici.
+#  3. Le table manager n'est PAS utilisé : la documentation l'annonce
+#     déprécié et inutile avec TSDB (et avec le stockage filesystem). Écrire
+#     table_manager.retention_enabled — réflexe hérité de BoltDB — serait de
+#     plus un nom de clé inexistant en 3.7 : refus au démarrage.
+#  4. L'index doit être découpé en périodes de 24 h : « Retention is only
+#     available if the index period is 24h ». C'est le cas ci-dessous.
+#  5. La rotation des fichiers est locale : Loki ne libère PAS de place quand
+#     le disque se remplit. La surveillance du disque (README, section
+#     « Espace disque ») est la seule défense, la rétention ne la remplace pas.
+#
+# Droits sur l'hôte : l'image court en utilisateur non-root 10001:10001 et le
+# bind mount /loki doit lui appartenir (« chown -R 10001:10001
+# /data/logging/loki », voir docs/logging/README.md), sinon premier échec
+# d'écriture du WAL.
+#
+# Contrôlable sans démarrer le service :
+#   docker run --rm -v "$PWD/docker/loki:/etc/loki:ro" --entrypoint /usr/bin/loki \
+#     grafana/loki:3.7.9 -config.file=/etc/loki/config.yaml -verify-config
+
+# Mono-tenant : aucun en-tête X-Scope-OrgID n'est exigé, les blocs de données
+# vivent sous le tenant interne « fake ». C'est bien une clé YAML valide au
+# niveau racine (défaut true) — et c'est ce qui rend la lecture Grafana
+# possible sans identifiant, sur un réseau interne non exposé.
+auth_enabled: false
+
+server:
+  # Écoute sur toutes les interfaces DU CONTENEUR : c'est le réseau interne
+  # « logging » qui décide qui peut joindre 3100. Aucun port n'est publié sur
+  # l'hôte (voir compose.yaml), donc Loki reste injoignable depuis Internet.
+  http_listen_address: 0.0.0.0
+  http_listen_port: 3100
+  grpc_listen_port: 9095
+  log_level: info
+  log_format: logfmt
+  graceful_shutdown_timeout: 30s
+
+# Un seul endroit où le stockage est déclaré : les composants chunks, index,
+# règles et compacteur en dérivent leurs chemins.
+common:
+  instance_addr: 127.0.0.1
+  # path_prefix se propage aux valeurs laissées par défaut : WAL sous
+  # /loki/wal, travail du compacteur sous /loki/compactor, règles temporaires
+  # sous /loki/rules-temp. Tout l'état tombe donc sur le montage persistant.
+  path_prefix: /loki
+  replication_factor: 1
+  storage:
+    # En 3.7, « filesystem » sous common.storage ne prend QUE ces deux clés.
+    # Le « directory: » que montrent beaucoup d'articles plus anciens n'est pas
+    # valide ici et ferait échouer le chargement de la configuration.
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  ring:
+    # Anneaux en mémoire : un seul membre, ni etcd ni consul ni memberlist à
+    # faire vivre (memberlist ne sert qu'en déploiement multi-instances).
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    # `from` = date de MISE EN SERVICE de cette installation. Ne pas reculer
+    # cette date après coup : elle normalise au premier du mois et créerait
+    # une seconde famille de tables.
+    - from: 2026-10-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        # 24 h : condition obligatoire de la rétention par suppression de
+        # table. Un autre découpage silencerait la purge.
+        period: 24h
+
+# ---------------------------------------------------------------------------
+# Exécution de la rétention (30 jours) et compression
+# ---------------------------------------------------------------------------
+compactor:
+  working_directory: /loki/compactor
+  # SANS cette ligne, le compacteur compresse et ne supprime jamais rien.
+  retention_enabled: true
+  # Stockage des demandes de suppression. Obligatoire dès que retention_enabled
+  # est vrai ; « filesystem » = sous le montage persistant, donc les marqueurs
+  # survivent aux redémarrages.
+  delete_request_store: filesystem
+  # Une passe de compression toutes les 10 minutes : c'est là que les lignes
+  # au-delà de 720 h sont physiquement écartées des blocs réécrits.
+  compaction_interval: 10m
+  # Marge de sécurité : une table journalière n'est attaquable que 2 h après sa
+  # fin, le temps que les lignes en retard soient écrites. Conséquence à
+  # connaître : les données vivent réellement ~722 h, jamais moins.
+  retention_delete_delay: 2h
+  # 50 ouvriers au lieu de 150 : sur 1 CPU, la purge doit rester un bruit de
+  # fond et ne pas affamer l'ingestion.
+  retention_delete_worker_count: 50
+  delete_request_cancel_period: 24h
+  max_compaction_parallelism: 1
+  upload_parallelism: 4
+
+# ---------------------------------------------------------------------------
+# Bornes d'ingestion et de requêtes
+# ---------------------------------------------------------------------------
+# Garde-fous calibrés pour 1 CPU / 1 Go, pas des objectifs : ils PEUVENT être
+# atteints. Une ligne refusée l'est visiblement (429 côté Alloy, événement dans
+# les logs Loki). Augmenter l'un de ces plafonds sans mesure à l'appui est le
+# chemin le plus direct vers un OOMKill.
+limits_config:
+  # 30 jours. Son exécuteur est compactor.retention_enabled, plus haut.
+  retention_period: 720h
+  # Ne pas interroger au-delà de ce qui existe encore : une requête qui
+  # touches des données purgées coûte du CPU pour un résultat vide.
+  max_query_lookback: 720h
+
+  # 2 Mo/s en régime soutenu, 4 Mo en pointe (défauts 4/6) : large devant le
+  # débit réel des logs applicatifs de ce serveur, assez bas pour qu'une boucle
+  # d'erreurs sur un service bavard ne sature pas le disque.
+  ingestion_rate_mb: 2
+  ingestion_burst_size_mb: 4
+  # Par flux (défauts 3 Mo / 15 Mo) : un seul conteneur ne peut pas accaparer
+  # toute la largeur disponible.
+  per_stream_rate_limit: 512KB
+  per_stream_rate_limit_burst: 1MB
+
+  # Une ligne trop ancienne est refusée plutôt qu'écrite dans une table fermée :
+  # 7 jours tolérés pour un rejeu manuel, rien au-delà.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+  # Une ligne démesurée est TRONQUÉE, pas rejetée avec tout son lot : un dump
+  # accidentel ne doit pas faire perdre un bloc de logs utiles.
+  max_line_size: 256KB
+  max_line_size_truncate: true
+
+  # Cardinalité : 4 labels par flux (service, container, job, host) pour
+  # quelques dizaines de conteneurs → la réalité est de l'ordre de la centaine
+  # de séries. 2000 reste très au-dessus, mais borne un usage qui dériverait.
+  max_global_streams_per_user: 2000
+  max_streams_per_user: 0
+  max_query_series: 200
+
+  # Parallélisme des requêtes volontairement bas (défauts 32 et 128) : sur un
+  # seul CPU, multiplier les sous-requêtes ne fait que déplacer laattente.
+  max_query_parallelism: 2
+  tsdb_max_query_parallelism: 4
+  # Une seule sous-requête par jour de plage (défaut 1 h) : divise par 24 le
+  # nombre d'allers-retours sur une plage de 30 jours.
+  split_queries_by_interval: 24h
+
+  # Ce qu'une requête peut lire et afficher : le vrai levier de mémoire côté
+  # lecture. 2 Go lus par requête est déjà énorme pour des logs filtrés.
+  max_query_bytes_read: 2GB
+  max_entries_limit_per_query: 5000
+
+  # L'API « volume » n'est utilisée par aucun des dashboards provisionnés ;
+  # la désactiver évite des agrégations coûteuses pour rien.
+  volume_enabled: false
+  deletion_mode: filter-and-delete
+  allow_structured_metadata: true
+
+# ---------------------------------------------------------------------------
+# Mémoire de l'ingester (le poste qui consomme le plus sur 1 Go)
+# ---------------------------------------------------------------------------
+ingester:
+  # Ce ne sont pas les blocs qui doivent être petits mais peu nombreux :
+  # 2 h de vie, fermeture à 2 h aussi, pour éviter une multiplication de
+  # fichiers sur le disque.
+  max_chunk_age: 2h
+  chunk_idle_period: 2h
+  chunk_target_size: 2097152
+  chunk_encoding: gzip
+  # 4 écritures concurrentes (défaut 32) : moins de pression sur le NVMe et sur
+  # les 60 secondes de mémoire qui précèdent une bascule.
+  concurrent_flushes: 4
+  wal:
+    # Plafond de mémoire autorisée au rejeu du WAL après un arrêt brutal :
+    # la valeur par défaut (4 Go) dépasse largement le gigaoctet alloué au
+    # conteneur, et un OOMKill au démarrage serait le pire scénario.
+    replay_memory_ceiling: 512MB
+
+# ---------------------------------------------------------------------------
+# Files d'attente de requêtes : refuser plutôt que saturer
+# ---------------------------------------------------------------------------
+# Les deux noms sont pièges : « max_outstanding_requests_per_tenant » existe
+# sous query_scheduler, et « max_outstanding_per_tenant » sous frontend.
+frontend:
+  max_outstanding_per_tenant: 256
+
+query_scheduler:
+  max_outstanding_requests_per_tenant: 256
+
+querier:
+  # Deux requêtes simultanées au plus : cinq onglets Grafana ouverts sur des
+  # plages larges ne doivent pas épuiser le gigaoctet.
+  max_concurrent: 2
+  # Les 3 dernières heures se lisent en mémoire (ingester), le reste sur
+  # disque : cette borne évite de balayer les blocs ouverts pour une plage
+  # ancienne.
+  query_ingesters_within: 3h
+
+# ---------------------------------------------------------------------------
+# Caches internes, bornés
+# ---------------------------------------------------------------------------
+# Sans Redis ni Memcached, Loki active tout seul ses caches en mémoire, chacun
+# plafonné par défaut à 100 Mo. Les ramener à 32 Mo libère de l'espace pour
+# l'ingestion, au prix de quelques relectures disque — choix assumé sur 1 Go.
+chunk_store_config:
+  chunk_cache_config:
+    embedded_cache:
+      enabled: true
+      max_size_mb: 32
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 32
+
+# Sonde de télémétrie vers stats.grafana.org : coupée. Aucun des dashboards ne
+# lit ces données, et cette installation ne doit rien envoyer dehors.
+analytics:
+  reporting_enabled: false
+
+# Aucun bloc ruler : aucune règle d'alerte n'est déployée ici (la mission ne
+# demande pas d'alerting), et le stockage des règles découle de common.storage.

@@ -1,0 +1,873 @@
+{
+  "uid": "yabiladi-traefik-traffic-errors",
+  "title": "Traefik — trafic et erreurs",
+  "description": "Journal d’erreur de Traefik v3 (format logfmt : horodatage, niveau à deux lettres, error=\"…\", entryPointName, routerName).",
+  "tags": [
+    "yabiladi",
+    "loki",
+    "traefik"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "",
+  "schemaVersion": 42,
+  "version": 0,
+  "id": null,
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {
+    "time_options": [
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "3h",
+      "6h",
+      "12h",
+      "1d",
+      "7d",
+      "30d"
+    ]
+  },
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "container",
+        "label": "Conteneur",
+        "type": "query",
+        "hide": 0,
+        "skipUrlSync": false,
+        "datasource": {
+          "type": "loki",
+          "uid": "yabiladi-loki"
+        },
+        "query": "label_values({service=\"traefik\"}, container)",
+        "definition": "label_values({service=\"traefik\"}, container)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "allowCustomValue": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Lignes ERR",
+      "description": "Niveau ERR du journal Traefik.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"traefik\", container=~\"$container\"} |~ \" ERR \" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Lignes WRN",
+      "description": null,
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"traefik\", container=~\"$container\"} |~ \" WRN \" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Erreurs de routeur",
+      "description": "Lignes ERR portant un routerName=",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"traefik\", container=~\"$container\"} |~ \" ERR \" | regexp \"routerName=(?P<r>[a-zA-Z0-9_@.\\\\-]+)\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Erreurs TLS / ACME",
+      "description": "Motifs tls, certificate, acme dans le journal.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum(count_over_time({service=\"traefik\", container=~\"$container\"} |~ \"(?i)(tls|certificate|acme)\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "",
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Volume par niveau",
+      "description": "Niveaux INF, WRN, ERR extraits du préfixe logfmt.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (lvl) (count_over_time({service=\"traefik\", container=~\"$container\"} | regexp \"(?P<lvl>ERR|WRN|INF) \" [$__auto]))",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "{{lvl}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Erreurs par routeur",
+      "description": "Permet de voir si une route précise casse (middleware manquant, backend injoignable) sans toucher aux autres.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "interval": "5m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (routerName) (count_over_time({service=\"traefik\", container=~\"$container\"} |~ \" ERR \" | regexp \"routerName=(?P<routerName>[a-zA-Z0-9_@.\\\\-]+)\" [$__auto]))",
+          "queryType": "range",
+          "refId": "A",
+          "legendFormat": "{{routerName}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "decimals": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Répartition des messages d’erreur",
+      "description": "Le message est l’attribut error=\"…\" de Traefik ; cardinalité naturellement bornée par les types d’erreur, pas par les URL.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (err) (topk(12, count_over_time({service=\"traefik\", container=~\"$container\"} |~ \" ERR \" | regexp \"error=\\\"(?P<err>[^\\\"]{1,80})\" [$__range])))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{err}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Erreurs par point d’entrée",
+      "description": "web (HTTP) ou websecure (HTTPS) : repère utile quand un certificat ou une redirection pose problème.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (entryPointName) (count_over_time({service=\"traefik\", container=~\"$container\"} |~ \" ERR \" | regexp \"entryPointName=(?P<entryPointName>[a-zA-Z0-9_\\\\-]+)\" [$__range]))",
+          "queryType": "instant",
+          "instant": true,
+          "refId": "A",
+          "legendFormat": "{{entryPointName}}",
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "textMode": "value",
+        "sort": "desc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Dernières erreurs Traefik",
+      "description": "Toutes lignes ERR, avec le routeur et l’erreur.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"traefik\", container=~\"$container\"} |~ \" ERR \"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Erreurs TLS et certificats",
+      "description": "Journalisation limitée à ce que Traefik écrit : voir les limites plus bas.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"traefik\", container=~\"$container\"} |~ \"(?i)(tls|certificate|acme|challenge)\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Erreurs de connexion aux backends",
+      "description": "Dial, refused, timeout, host inconnu : la route existe mais le service derrière ne répond pas.",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "yabiladi-loki"
+          },
+          "editorMode": "code",
+          "expr": "{service=\"traefik\", container=~\"$container\"} |~ \"(?i)(dial tcp|connection refused|no such host|i/o timeout)\"",
+          "queryType": "range",
+          "refId": "A",
+          "maxLines": 100,
+          "hide": false
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      }
+    },
+    {
+      "type": "text",
+      "title": "Ce que Traefik ne journalise PAS ici",
+      "description": "",
+      "datasource": {
+        "type": "loki",
+        "uid": "yabiladi-loki"
+      },
+      "options": {
+        "content": "— les **access logs sont désactivés** dans cette stack (`--accesslog` absent) : pas de débit de requêtes, pas de code par service, pas de durée ;\n— un **succès de renouvellement ACME** n’apparaît que si le challenge échoue ou se déclenche ; l’absence de ligne n’est pas la preuve que le certificat est valide — vérification réelle : `docker compose exec traefik traefik version` ne le dit pas, il faut lire le certificat (openssl s_client) ;\n— les erreurs de **configuration de middleware** sont bien dans le journal (type « middleware … not found »), c’est ce que capte le panneau « Dernières erreurs » ;\n— activer les access logs augmenterait nettement le volume ingesté et l’CPU de Loki : à décider mesuré, pas par défaut.",
+        "mode": "markdown"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      }
+    }
+  ]
+}

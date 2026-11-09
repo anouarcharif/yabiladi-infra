@@ -1,0 +1,55 @@
+# Source de données Prometheus provisionnée (Grafana 13.3.0).
+#
+# Mêmes règles que pour docker/grafana/provisioning/datasources/loki.yaml, dont
+# ce fichier est le jumeau : uid figé, mode proxy, aucune authentification (le
+# service n'en connaît pas et reste sur le réseau interne « logging »), rien de
+# modifiable depuis l'UI. Ce qui change, et pourquoi :
+#
+# - « isDefault: false » : Loki garde la sienne. Une seule source par défaut est
+#   possible, et c'est elle que Grafana préselecte quand on crée un panneau sans
+#   la nommer. Ici, la source est toujours nommée dans le dashboard — un uid
+#   explicite dans chaque panneau, comme pour Loki.
+#
+# - « uid: yabiladi-prometheus » : le dashboard provisionné le cite panneau par
+#   panneau. Changer ce uid déconnecte le tableau « Docker et système », donc il
+#   ne se touche qu'avec lui — exactement la contrainte de « yabiladi-loki ».
+#
+# - « timeInterval: 30s » : c'est le scrape_interval de
+#   docker/prometheus/prometheus.yml, et le pas plancher que Grafana enverra dans
+#   ses requêtes « range ». Sans lui, Grafana propose des points plus serrés que
+#   les données réellement stockées : les courbes paraissent hachées, et le
+#   navigateur paie des points qui n'existent pas.
+#   Contrepartie à connaître : c'est sur ce pas que $__rate_interval calcule ses
+#   fenêtres de « rate ». À 30 s de scrape, une fenêtre de 30 s ne couvre que
+#   deux points — suffisant pour un instantané, trop juste pour une tendance.
+#   Les panneaux de débit laissent donc $__rate_interval faire, lui seul élargit
+#   la fenêtre quand l'opérateur zoome.
+#
+# - « httpMethod: POST » : les requêtes de groupe (« sum by (service) … ») sur
+#   une fenêtre de 24 h dépassent facilement la longueur d'URL qu'un GET tolère.
+#   POST est le réglage par défaut des sources Prometheus récentes dans Grafana ;
+#   il est posé ici pour ne pas dépendre de ce que l'UI aurait pu enregistrer.
+#
+# - « manageAlerts: false » : Grafana ne doit pas proposer de pousser ses règles
+#   dans Prometheus. La pile ne charge aucune règle côté Prometheus
+#   (aucun bloc « alerting: », aucun « rule_files: » dans sa configuration) et
+#   l'alerting de la maison reste celui de docker/grafana/provisioning/alerting,
+#   branché sur Postfix. Laisser Grafana croire qu'il administre Prometheus
+#   ouvrirait un second chemin de notification, sans règles ni destinataire.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: yabiladi-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: false
+    jsonData:
+      timeInterval: 30s
+      httpMethod: POST
+      manageAlerts: false
+    # false : la source se relit dans ce fichier à chaque démarrage. Un
+    # changement fait dans l'UI serait écrasé au redéploiement, donc il ne doit
+    # pas être possible.
+    editable: false

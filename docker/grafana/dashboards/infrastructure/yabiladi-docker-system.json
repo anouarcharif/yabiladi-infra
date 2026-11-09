@@ -1,0 +1,2034 @@
+{
+  "uid": "yabiladi-docker-system",
+  "title": "Docker et système",
+  "description": "Machine et conteneurs mesurés par Prometheus : CPU, mémoire, charge, disque, réseau, E/S, événements OOM et redémarrages. node_exporter pour la machine, cAdvisor pour les conteneurs. Les limites de lecture sont dans le dernier panneau.",
+  "tags": [
+    "yabiladi",
+    "prometheus",
+    "docker",
+    "systeme"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "1m",
+  "schemaVersion": 42,
+  "version": 0,
+  "id": null,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m",
+      "1h",
+      "1d"
+    ]
+  },
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "serveur",
+        "label": "Serveur",
+        "type": "query",
+        "hide": 0,
+        "skipUrlSync": false,
+        "datasource": {
+          "type": "prometheus",
+          "uid": "yabiladi-prometheus"
+        },
+        "query": {
+          "query": "label_values(node_uname_info, instance)",
+          "refId": "Prometheus-serveur-Query"
+        },
+        "definition": "label_values(node_uname_info, instance)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": false,
+          "text": "yabiladi",
+          "value": "yabiladi"
+        },
+        "options": [],
+        "allowCustomValue": false
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "hide": 0,
+        "skipUrlSync": false,
+        "datasource": {
+          "type": "prometheus",
+          "uid": "yabiladi-prometheus"
+        },
+        "query": {
+          "query": "label_values(container_last_seen{name=~\".+\",instance=\"$serveur\"}, service)",
+          "refId": "Prometheus-service-Query"
+        },
+        "definition": "label_values(container_last_seen{name=~\".+\",instance=\"$serveur\"}, service)",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "allowCustomValue": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Démarré depuis",
+      "description": "Temps écoulé depuis le démarrage de la machine mesurée : le noyau de node_exporter, pas celui du conteneur. Sur le poste de développement, c’est la VM Docker (WSL2), pas Windows.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "(time() - node_boot_time_seconds{instance=\"$serveur\"}) * 1000",
+          "legendFormat": "",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": null,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "dtdurationms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Conteneurs actifs",
+      "description": "Conteneurs vus par cAdvisor dans les 60 dernières secondes. Un conteneur arrêté il y a moins de deux minutes reste compté : la fenêtre suit le housekeeping, pas le désir de l’opérateur.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "count(container_last_seen{name=~\".+\",instance=\"$serveur\",service=~\"$service\"} > (time() - 60))",
+          "legendFormat": "",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Charge (1 min)",
+      "description": "Charge moyenne sur 1 minute divisée par le nombre de cœurs : 1 = tous les cœurs occupés, avec une file d’attente au-delà.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "node_load1{instance=\"$serveur\"} / on(instance) count by (instance) (count by (instance, cpu) (node_cpu_seconds_total{instance=\"$serveur\"}))",
+          "legendFormat": "",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 1.2
+              }
+            ]
+          },
+          "unit": "short",
+          "max": 2
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Mémoire utilisée",
+      "description": "Part de la RAM physique engagée, hors « available » : la mémoire en cache et en tampons réutilisables est donc comptée comme libre.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance=\"$serveur\"} / node_memory_MemTotal_bytes{instance=\"$serveur\"})",
+          "legendFormat": "",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent",
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Disque — le plus rempli",
+      "description": "Le maximum des points de montage réellement stockés (ext2/3/4, xfs, btrfs). La mesure porte sur « avail » et non « free » : un ext4 réserve environ 5 % pour root, ces octets-là comptent donc comme utilisés.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "max(100 * (1 - node_filesystem_avail_bytes{instance=\"$serveur\",fstype=~\"ext[234]|xfs|btrfs\"} / node_filesystem_size_bytes{instance=\"$serveur\",fstype=~\"ext[234]|xfs|btrfs\"}))",
+          "legendFormat": "",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "unit": "percent",
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "TCP établies",
+      "description": "Connexions TCP à l’état ESTABLISHED sur la machine, collectées par le collecteur « tcpstat » de node_exporter. Le seul panneau de cette rangée qui ne vient pas de /proc/stat.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "node_netstat_Tcp_CurrEstab{instance=\"$serveur\"}",
+          "legendFormat": "",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "fieldOptions": {
+          "options": []
+        },
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucune donnée",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU — temps par mode",
+      "description": "Pourcentage des cœurs occupés, idle exclu : la somme des courbes donne l’occupation totale. « system » et « user » se distinguent, « iowait » signale une machine qui attend le disque.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "100 * sum by (instance, mode) (rate(node_cpu_seconds_total{instance=\"$serveur\",mode!=\"idle\"}[$__rate_interval])) / on(instance) group_left count by (instance) (count by (instance, cpu) (node_cpu_seconds_total{instance=\"$serveur\"}))",
+          "legendFormat": "{{mode}}",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Charge système (1, 5, 15 min)",
+      "description": "Les trois fenêtres de la charge, sans division par le nombre de cœurs cette fois : c’est le « uptime » brut. Non empilées — les additionner n’aurait aucun sens.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "node_load1{instance=\"$serveur\"}",
+          "legendFormat": "1 min",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "B",
+          "expr": "node_load5{instance=\"$serveur\"}",
+          "legendFormat": "5 min",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "C",
+          "expr": "node_load15{instance=\"$serveur\"}",
+          "legendFormat": "15 min",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 2,
+          "min": null,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 5
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Mémoire — utilisée, cache, swap",
+      "description": "Utilisée = totale moins « available ». Cache + tampons est réutilisable sous pression : une courbe qui monte n’est pas une fuite. « Swap utilisé », lui, ne se relâche qu’en étant rendu.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "node_memory_MemTotal_bytes{instance=\"$serveur\"} - node_memory_MemAvailable_bytes{instance=\"$serveur\"}",
+          "legendFormat": "Utilisée",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "B",
+          "expr": "node_memory_Cached_bytes{instance=\"$serveur\"} + node_memory_Buffers_bytes{instance=\"$serveur\"}",
+          "legendFormat": "Cache + tampons",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "C",
+          "expr": "node_memory_SwapTotal_bytes{instance=\"$serveur\"} - node_memory_SwapFree_bytes{instance=\"$serveur\"}",
+          "legendFormat": "Swap utilisé",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Disque — E/S par périphérique",
+      "description": "Lecture tracée en négatif, écriture en positif : le zéro du milieu est la ligne de base, et un pic de part et d’autre se lit d’un coup d’œil. Le temps passé par opération se lit sur le panneau « E/S par conteneur ».",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, device) (rate(node_disk_written_bytes_total{instance=\"$serveur\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} écrit",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "B",
+          "expr": "-sum by (instance, device) (rate(node_disk_read_bytes_total{instance=\"$serveur\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} lu",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": null,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Réseau — débit par interface",
+      "description": "Réception en positif, émission en négatif. Les interfaces virtuelles (veth, ponts Docker) sont exclues à la source par node_exporter : il reste la carte qui voit vraiment le trafic.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, device) (rate(node_network_receive_bytes_total{instance=\"$serveur\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} reçu",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "B",
+          "expr": "-sum by (instance, device) (rate(node_network_transmit_bytes_total{instance=\"$serveur\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} émis",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": null,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "E/S disque par conteneur",
+      "description": "Octets comptables par le pilote de blocs du noyau : ce que le conteneur lit et écrit réellement, hors cache de page. Écriture en négatif.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, service) (rate(container_fs_writes_bytes_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} écrit",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "B",
+          "expr": "-sum by (instance, service) (rate(container_fs_reads_bytes_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} lu",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": null,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU par conteneur (% d’un cœur)",
+      "description": "100 % = un cœur entier occupé, 800 % = huit cœurs. Les limites CPU de Compose (« deploy.resources.limits.cpus ») ne se lisent pas ici : elles se voient par l’aplatissement de la courbe sous son plafond.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "100 * sum by (instance, service) (rate(container_cpu_usage_seconds_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{service}}",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Mémoire par conteneur (working set)",
+      "description": "« working set » et non « usage » : la mémoire non récupérable sans swap, celle que l’OOM killer regarde. C’est la seule qui prédit un arrêt.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, service) (container_memory_working_set_bytes{name=~\".+\",instance=\"$serveur\",service=~\"$service\"})",
+          "legendFormat": "{{service}}",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": 0,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 21
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Réseau par conteneur",
+      "description": "Débit à travers les interfaces virtuelles du conteneur, réception en positif et émission en négatif. Le trafic boucle (localhost) n’y passe pas : un conteneur qui en attaque un autre par le nom Docker est invisible ici.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, service) (rate(container_network_receive_bytes_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} reçu",
+          "instant": false,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "B",
+          "expr": "-sum by (instance, service) (rate(container_network_transmit_bytes_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} émis",
+          "instant": false,
+          "hide": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "maxHeight": 600,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineStyle": {
+              "fill": "solid"
+            },
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": null,
+          "min": null,
+          "noValue": "aucune donnée sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      }
+    },
+    {
+      "type": "table",
+      "title": "État par conteneur (instantané)",
+      "description": "Une ligne par service, à la dernière mesure de la plage. La « limite mémoire » à 0 ou à la taille de la RAM totale signifie qu’aucune limite n’est posée sur le service dans compose.yaml — ce n’est pas un conteneur sans plafond de mémoire, c’est le plafond du noyau.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "maxDataPoints": 1,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (service) (container_memory_working_set_bytes{name=~\".+\",instance=\"$serveur\",service=~\"$service\"})",
+          "legendFormat": "Mémoire (working set)",
+          "instant": true,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "B",
+          "expr": "100 * sum by (service) (rate(container_cpu_usage_seconds_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "CPU (% d’un cœur)",
+          "instant": true,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "C",
+          "expr": "sum by (service) (rate(container_network_receive_bytes_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]) + rate(container_network_transmit_bytes_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__rate_interval]))",
+          "legendFormat": "Réseau (rx + tx)",
+          "instant": true,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "D",
+          "expr": "sum by (service) (container_spec_memory_limit_bytes{name=~\".+\",instance=\"$serveur\",service=~\"$service\"})",
+          "legendFormat": "Limite mémoire",
+          "instant": true,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "E",
+          "expr": "sum by (service) (increase(container_oom_events_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__range]))",
+          "legendFormat": "OOM sur la période",
+          "instant": true,
+          "hide": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "F",
+          "expr": "sum by (service) (changes(container_start_time_seconds{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__range]))",
+          "legendFormat": "Redémarrages sur la période",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "service",
+            "mode": "exclude"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time (A)": true
+            },
+            "indexByName": {
+              "service": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4,
+              "Value #E": 5,
+              "Value #F": 6
+            },
+            "renameByName": {
+              "service": "Service",
+              "Value #A": "Mémoire (working set)",
+              "Value #B": "CPU (% d’un cœur)",
+              "Value #C": "Réseau (rx + tx)",
+              "Value #D": "Limite mémoire",
+              "Value #E": "OOM sur la période",
+              "Value #F": "Redémarrages sur la période"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": [
+              "Mémoire (working set)"
+            ],
+            "ascending": false
+          }
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "decimals": 1,
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Mémoire (working set)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Limite mémoire"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CPU (% d’un cœur)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Réseau (rx + tx)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "Bps"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "OOM sur la période"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Redémarrages sur la période"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Mémoire par conteneur (classement)",
+      "description": "La même mesure que le panneau « Mémoire par conteneur », réduite à la dernière valeur et triée. Le palmarès, pas l’histoire.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, service) (container_memory_working_set_bytes{name=~\".+\",instance=\"$serveur\",service=~\"$service\"})",
+          "legendFormat": "{{service}}",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "sort": "desc",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucun conteneur concerné sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 39
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Événements OOM par conteneur",
+      "description": "Compteur cumulé depuis le premier housekeeping de cAdvisor sur le conteneur : une valeur dit « il y a eu un arrêt pour mémoire », pas « tant d’arrêts par heure ». Le cgroup d’un conteneur recréé repart à zéro.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, service) (increase(container_oom_events_total{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__range]))",
+          "legendFormat": "{{service}}",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "sort": "desc",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucun conteneur concerné sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 39
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Redémarrages par conteneur",
+      "description": "Variations de l’horodatage de démarrage sur la plage : un conteneur relancé par « docker compose up » compte comme un redémarrage, volontaire ou non. La raison, elle, est dans les logs (tableau « Docker Logs — vue générale »).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (instance, service) (changes(container_start_time_seconds{name=~\".+\",instance=\"$serveur\",service=~\"$service\"}[$__range]))",
+          "legendFormat": "{{service}}",
+          "instant": true,
+          "hide": false
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        },
+        "showUnfilled": true,
+        "sort": "desc",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "noValue": "aucun conteneur concerné sur la période",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 39
+      }
+    },
+    {
+      "type": "text",
+      "title": "Comment lire ce dashboard",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "options": {
+        "content": "**Ce qui est mesuré, et par qui.** La machine vient de node_exporter (`/proc` et `/sys` de l’hôte, montés en lecture seule), les conteneurs de cAdvisor (cgroups et API Docker). Prometheus récolte les deux toutes les 30 s et garde 15 jours au plus, 2 Go au plus. Les variables du haut de page choisissent la machine (`$serveur`) et les services (`$service`, avec « All » = « tout ce qui porte une étiquette de service »).\n\n**Les trois pièges de lecture.**\n\n— *La RAM physique n’est pas la somme des conteneurs.* La rangée « machine » additionne les espaces d’adressage : la même page mappée dans deux processus compte deux fois, et le working set d’un conteneur ne dit rien du cache de page partagé. Les deux totaux ne se recoupent donc jamais, et ce n’est pas une incohérence.\n\n— *Un pic de CPU peut être du throttling, pas de la charge.* Une limite Compose (« deploy.resources.limits.cpus ») atteinte aplatis la courbe sur une valeur ronde. Un conteneur à 30 % pile n’est pas un conteneur tranquille : c’est peut-être un conteneur bridé, et le reste de sa demande n’apparaît nulle part.\n\n— *Sur le poste de développement, les panneaux « machine » mesurent la VM WSL2, pas Windows.* La RAM affichée est celle allouée par `.wslconfig`, le nombre de cœurs aussi, et les points de montage sont ceux de la VM. Sur le serveur Debian, la mesure porte bien sur la machine réelle.\n\n**Ce qui n’est pas compté ici.** Le compte « Conteneurs actifs » et les panneaux par conteneur ne voient que les conteneurs portant une étiquette de service, c’est-à-dire ceux dont Compose a fait le nom (`nom-du-projet-service-1`). Les conteneurs lancés à la main (`docker run`) et ceux des autres projets hébergés par le même VM Docker sont bien récoltés par cAdvisor — ils restent hors de ces panneaux. Mesuré le 2026-11-04 sur ce poste : 27 conteneurs déclarés par cAdvisor, 22 pour ce projet.\n\n**Ce que ces conteneurs ne voient pas.** Le disque du système d’hôte Windows (le montage 9p de C:\\ est exclu par node_exporter, parce que ses octets ne sont pas ceux d’un disque local), l’état des services systemd (le collecteur exige la socket dbus de l’hôte, non montée ici) et le trafic entre conteneurs par `localhost` (il ne traverse pas l’interface virtuelle comptée par cAdvisor).\n\n**Ce que les limites CPU/RAM de Compose ne sont pas.** Les blocs `deploy.resources.limits` s’appliquent aussi aux six conteneurs de la pile de supervision (dont Prometheus, cAdvisor et node_exporter) : ce sont des plafonds, jamais une consommation garantie. Le panneau « CPU par conteneur » est le seul endroit qui dit ce que chacun consomme vraiment."
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      }
+    }
+  ]
+}

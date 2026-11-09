@@ -1,0 +1,217 @@
+apiVersion: 1
+
+# Règles d'alerte sur les rebonds du relais Postfix (emails sortants).
+#
+# D'OÙ VIENNENT LES MOTIFS. Toutes les expressions ci-dessous ont été exécutées
+# contre les journaux réels de {service="postfix"} (maillog_file=/dev/stdout,
+# docker/postfix/main.cf) : chaque tentative de remise y laisse une ligne
+#   postfix/smtp[pid]: ID: to=<adresse>, relay=..., delay=..., dsn=5.7.1,
+#     status=bounced (host ... said: 550-5.7.1 ...)
+# d'où sont tirés « status=bounced », « dsn=5.7. », et le domaine de to=<…>.
+# Le dashboard en face est docker/grafana/dashboards/applications/
+# yabiladi-email-delivery.json : les règles disent « ça casse », la page dit
+# « sur quel domaine et avec quel code ».
+#
+# POURQUOI « dsn=5.7. » A UN SEUIL DE ZÉRO. 5.7.x est la classe « politique de
+# sécurité » du destinataire : IP non autorisée par SPF, DMARC en échec, message
+# refusé comme spam, relais non accepté. Un seul de ces rejets vient d'être
+# produit par notre configuration ou notre réputation — il n'y a aucune raison
+# d'attendre qu'ils s'accumulent, et chacun est reproductible à la demande par
+# la recette du to-do. 5.1.1 (boîte inconnue) est volontairement exclu de cette
+# règle : c'est un défaut d'adresse du destinataire, pas un défaut de notre
+# côté, et il est couvert par la règle de volume.
+#
+# POURQUOI UN SEUIL DE VOLUME À CINQ. Un ou deux 5.1.1 par jour sont normaux
+# (adresse saisie de travers dans un formulaire). Au-delà de cinq en un quart
+# d'heure, c'est une liste ou un lot : newsletter partie avec des adresses
+# mortes, formulaire qui renvoie une adresse erronée, ou blocage de réputation
+# qui bascule les rejets en 5.x. Le seuil est un choix d'exploitation, pas une
+# mesure.
+#
+# CE QUE CES RÈGLES NE PEUVENT PAS VOIR. Un message encore en file (status=
+# deferred) n'est pas un rebond : rien n'est perdu tant que Postfix réessaie, et
+# la règle ne le compte pas. La profondeur de file n'est pas journalisée par
+# Postfix : elle se lit par « docker compose exec postfix postqueue -p » sur le
+# serveur, pas ici.
+#
+# LE DOSSIER. « Applications » est créé par le fournisseur de tableaux de bord
+# (docker/grafana/provisioning/dashboards/logging.yaml) ; c'est le nom qu'attend
+# « folder: » ici, jamais un folderUid (voir README.md, mesures sur 13.3.0).
+groups:
+  - orgId: 1
+    name: emails-sortants
+    folder: 'Applications'
+    interval: 1m
+    rules:
+      # ---------------------------------------------------------------------
+      # Rejet pour politique ou authentification : la classe 5.7.x. C'est la
+      # règle qui aurait sonné le jour du test vers Gmail depuis le poste de
+      # développement (550-5.7.1 « IP you're using ... is not authorized »).
+      # ---------------------------------------------------------------------
+      - uid: email-rebond-politique
+        title: Emails — rejet définitif pour politique ou authentification
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="postfix"} |= "status=bounced" |= "dsn=5.7." [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: email
+        annotations:
+          summary: Un destinataire refuse nos messages pour politique ou authentification
+          description: >-
+            Le MX a répondu 5.7.x : IP non autorisée (SPF), DMARC en échec, ou
+            message classé indésirable. Lire la ligne du rejet dans le dashboard
+            « Emails sortants » (panneau « Rejets définitifs ») : le texte du
+            serveur dit lequel des trois. Vérifier ensuite, dans cet ordre :
+            docker compose exec postfix postconf -h myhostname (doit être
+            tarourt.yabiladi.com, nom dont le PTR est celui de l'IP) ;
+            docker compose logs php | grep DKIM (clé illisible = messages non
+            signés) ; puis les trois verdicts SPF/DKIM/DMARC d'un envoi de test
+            (docker compose exec -T php php bin/console mailer:test <adresse>
+            --from=webmaster@yabiladi.com). Un rejet en 5.7.1 accompagné de
+            « not authorized » vient de l'IP ou du SPF, pas du contenu.
+      # ---------------------------------------------------------------------
+      # Volume : tous les rejets définitifs, classe confondue.
+      # ---------------------------------------------------------------------
+      - uid: email-rebond-volume
+        title: Emails — plus de cinq rejets définitifs en quinze minutes
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="postfix"} |= "status=bounced" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [5] }
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        labels:
+          severity: warning
+          team: email
+        annotations:
+          summary: Plus de cinq rejets définitifs en un quart d'heure
+          description: >-
+            Trop de messages sont refusés pour que ce soit le hasard d'une
+            adresse mal saisie. Regarder « Codes SMTP des rejets » dans le
+            dashboard : si la classe dominante est 5.1.x, un lot contient des
+            adresses mortes (newsletter, formulaire) ; si c'est 5.7.x, voir la
+            règle de politique. Un pic isolé après un envoi de masse est normal
+            sur quelques adresses ; le même pic qui se répète à chaque lot ne
+            l'est pas.
+      # ---------------------------------------------------------------------
+      # Un domaine destinataire qui refuse systématiquement : c'est ainsi
+      # qu'apparaît un blocage de réputation (Yahoo, Outlook) avant qu'il ne
+      # touche tous les destinataires.
+      # ---------------------------------------------------------------------
+      - uid: email-rebond-domaine
+        title: Emails — un domaine destinataire rejette nos messages
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum by (domain) (count_over_time({service="postfix"} |= "status=bounced" | regexp "to=<[^@>]+@(?P<domain>[^>]+)>" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [3] }
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        labels:
+          severity: warning
+          team: email
+        annotations:
+          summary: Le domaine {{ $labels.domain }} rejette plus de trois messages en un quart d'heure
+          description: >-
+            Plusieurs destinataires d'un même domaine refusent nos messages :
+            c'est la signature d'un blocage côté destinataire (réputation de
+            l'IP ou du domaine), pas d'adresses fausses une par une. Lire le
+            texte du 550 dans « Rejets définitifs » : « TSS04 » ou « blocked »
+            chez Yahoo, « 5.7.26 » ou « spam » chez Gmail, « 5.7.1 not
+            authorized » renvoie à l'IP et au SPF. Un déblocage se demande au
+            POSTMASTER du destinataire ou à l'hébergeur, pas dans ce dépôt ;
+            entre-temps, un envoi de masse vers ce domaine est à suspendre
+            plutôt qu'à répéter, chaque rejet aggravant la réputation.

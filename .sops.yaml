@@ -1,0 +1,27 @@
+# Regles de chiffrement du coffre (SOPS + Age).
+#
+# Ce que ce fichier rend possible : « git pull » sur le serveur amene les secrets
+# de production, mais sous forme chiffree. Les valeurs sont illegibles dans git et
+# dans git log ; les noms de variables, eux, restent en clair, donc un diff de
+# rotation de secret se lit (« LEGACY_FTP_PASSWORD a change ») sans jamais reveler
+# ce qu'il est devenu.
+#
+# La cle privee age correspondante n'existe que sur la machine qui dechiffre :
+#   /root/.config/age/keys.txt           (serveur, et c'est le chemin par defaut)
+#   C:\Users\<vous>\.config\age\keys.txt (poste de dev)
+# Elle ne doit JAMAIS entrer dans ce depot. Sans elle, le depot est inutilisable :
+# c'est voulu, un clone du repo ne donne pas acces a la production.
+#
+# Ajouter un destinataire (un second poste, un CI qui deploye) = ajouter sa cle
+# publique separee par une virgule, puis re-chiffrer :
+#   deploy/encrypt-secrets.sh
+creation_rules:
+  # Les secrets de type fichier de variables (dotenv) : une valeur par ligne.
+  - path_regex: ^deploy/secrets/.*\.sops\.env$
+    age: "age1g0mrcus5sa5ay0n9n6prnuvfqq0ygrqnslht0pj8a7mw2zn6mudqp0fkay"
+
+  # Les secrets qui ne sont pas du dotenv : un fichier opaque dont le contenu est
+  # le secret lui-meme (le mot de passe admin de Grafana, lu par « secrets: » de
+  # compose sous forme de fichier monte).
+  - path_regex: ^deploy/secrets/.*\.sops\.bin$
+    age: "age1g0mrcus5sa5ay0n9n6prnuvfqq0ygrqnslht0pj8a7mw2zn6mudqp0fkay"

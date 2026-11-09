@@ -1,0 +1,601 @@
+apiVersion: 1
+
+# Règles d'alerte des quatre antennes SHOUTcast (ports 8000, 8100, 9000, 9100).
+#
+# D'OÙ VIENT CHAQUE MOTIF. Tout est mesuré dans Loki sur ce dépôt, rien n'est
+# copié d'une documentation SHOUTcast : les lignes comparées sont celles que les
+# conteneurs écrivent réellement sur leur sortie standard — celles que sc_serv et
+# sc_trans produisent depuis que « ScreenLog=1 » est posé dans
+# docker/radio/conf/sc_serv.conf.tpl, et celles que docker/radio/heartbeat.py
+# écrit chaque minute. Alloy collecte tout sous un label « service » propre au
+# conteneur ; chaque expr ci-dessous a été exécutée contre {service="radio-…"}.
+# Les quatre antennes produisent les mêmes formes de lignes (seul le nom change),
+# donc une règle par antenne se décline sans inventer de motif.
+#
+# POURQUOI LE BATTEMENT VIENT DE « 7.html » ET NON DES TITRES. Le premier motif
+# essayé pour « un titre passe-t-il ? » a été la ligne que sc_trans écrit pour
+# chaque fichier engagé (« [DECODE] Opened »). Il faux-sonne : entre deux
+# morceaux plus rien ne sort alors que le flux est vivant, et la discothèque
+# compte des mixes longs. Plus long trou sans ligne « Opened », mesuré sur une
+# fenêtre glissante de 12 h : chaabi 24,5 min, azawan 21,3, yabiladi 16,2, nayda
+# 11,5. Un battement calé sur les ouvertures de fichiers sonnerait donc en pleine
+# diffusion. Les règles comptent désormais les lignes « [HEARTBEAT] … on_air=1 »
+# que heartbeat.py écrit chaque minute : elles rendent le « streamStatus » du DNAS
+# (le 2ᵉ champ de 7.html), 1 tant que la source est branchée, quel que soit le
+# morceau en cours. Ces lignes viennent du conteneur lui-même, pas d'une sonde
+# extérieure : le battement meurt avec l'antenne, et son absence est précisément
+# l'état d'alerte (noDataState est Alerting ici, et nulle part ailleurs).
+#
+# CE QUE CES RÈGLES VOIENT, CE QU'ELLES NE VOIENT PAS. Le battement tombant chaque
+# minute, « le DNAS répond et streamStatus vaut 1 » se lit désormais en continu
+# dans Loki — comme le HEALTHCHECK du conteneur, mais avec l'historique et
+# l'alerte en plus, et sans service de plus dans le compose. Ce que Grafana ne
+# voit toujours pas : la QUALITÉ de l'audio. Un DNAS dont la source est branchée
+# sur un décodeur qui tourne à vide annonce streamStatus=1 et bat « on_air=1 ».
+# Ce cas reste couvert par les règles qui parlent des lignes sc_trans : « une
+# antenne avale ses fichiers » (trop d'ouvertures à la minute), « playlist à sec »
+# et « fichiers illisibles ».
+#
+# L'HEURE CITÉE DANS LE MAIL. Les fenêtres [5m] et [15m] sont relatives à
+# l'horloge qui évalue la règle, et LogQL compare des horodatages d'événements,
+# pas des heures de jour : aucune règle ne dépend donc du fuseau. En revanche,
+# le « Observed … at » du mail est l'heure du conteneur Grafana (TZ héritée de
+# LOGGING_TZ, voir compose.yaml), alors que l'interface affiche celle du
+# navigateur. Ne pas corriger une heure de grille dans un mail d'alerte.
+groups:
+  - orgId: 1
+    name: sante-des-antennes
+    # Dossier commun au dashboard d'audience et à celui de santé, créé par le
+    # fournisseur de tableaux de bord « yabiladi-radio »
+    # (docker/grafana/provisioning/dashboards/logging.yaml). Mesuré sur cette
+    # instance : la clef « folderUid » n'est pas lue au niveau d'un groupe —
+    # Grafana démarre alors en échec du module provisioning, avec
+    # « rule group has no folder set » dans les journaux, et ne remonte plus.
+    # C'est le NOM du dossier qui est attendu ici, et lui seul.
+    folder: 'Radio'
+    # Une minute : le plancher raisonnable pour une règle Loki. Le temps de
+    # réaction dominant n'est pas ici mais dans la fenêtre [5m] des règles de
+    # battement, l'« interval » ne faisant que fixer le pas de leur évaluation.
+    interval: 1m
+    rules:
+      # ---------------------------------------------------------------------
+      # Battement, une règle par antenne : le nombre de lignes
+      # « [HEARTBEAT] … on_air=1 » des cinq dernières minutes. Zéro battement sur
+      # les ondes — soit parce que le DNAS n'est plus branché à sa source (le
+      # battement continue alors sur « on_air=0 », et le comptage filtré ne rend
+      # plus de série), soit parce que le conteneur ne tourne plus et n'émet plus
+      # rien — est l'état d'alerte : noDataState est donc Alerting ici, et nulle
+      # part ailleurs. « for: 1m » ajoute une minute de tampon contre un creux
+      # d'ingestion ; la fenêtre de 5 min couvre déjà cinq battements.
+      # ---------------------------------------------------------------------
+      - uid: radio-yabiladi-ne-joue-plus
+        title: Radio Yabiladi — plus aucun titre ne passe à l'antenne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="radio-yabiladi"} |= "[HEARTBEAT]" |= " on_air=1 " [5m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: OK
+        for: 1m
+        labels:
+          severity: critical
+          team: radio
+          station: yabiladi
+        annotations:
+          summary: Antenne 8000 sans battement sur les ondes depuis environ six minutes
+          description: >-
+            heartbeat.py n'a écrit aucune ligne « on_air=1 » pour radio-yabiladi
+            depuis plus de cinq minutes : soit le DNAS n'est plus branché à sa
+            source (le battement continue alors sur « on_air=0 »), soit le
+            conteneur ne tourne plus et n'émet plus rien du tout. Vérifier dans
+            cet ordre : docker compose ps radio-yabiladi (le healthcheck 7.html
+            dit si le conteneur vit) ; curl -s http://127.0.0.1:8000/7.html (le
+            deuxième champ vaut 1 quand la source est branchée) ; docker compose
+            logs --since 30m radio-yabiladi (les lignes « [HEARTBEAT] » disent on
+            ou off, la dernière ligne sc_trans dit pourquoi). Un redémarrage
+            propre passe par le DAG radio-yabiladi, pas par un reload manuel.
+      - uid: radio-chaabi-ne-joue-plus
+        title: Radio Chaabi — plus aucun titre ne passe à l'antenne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="radio-chaabi"} |= "[HEARTBEAT]" |= " on_air=1 " [5m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: OK
+        for: 1m
+        labels:
+          severity: critical
+          team: radio
+          station: chaabi
+        annotations:
+          summary: Antenne 8100 sans battement sur les ondes depuis environ six minutes
+          description: >-
+            Même contrôle qu'à l'antenne principale, port 8100 : docker compose
+            ps radio-chaabi, puis curl -s http://127.0.0.1:8100/7.html (le
+            deuxième champ vaut 1 quand la source est branchée), puis docker
+            compose logs --since 30m radio-chaabi pour lire les lignes
+            « [HEARTBEAT] » et la dernière ligne de sc_trans.
+      - uid: radio-azawan-ne-joue-plus
+        title: Radio Azawan — plus aucun titre ne passe à l'antenne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="radio-azawan"} |= "[HEARTBEAT]" |= " on_air=1 " [5m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: OK
+        for: 1m
+        labels:
+          severity: critical
+          team: radio
+          station: azawan
+        annotations:
+          summary: Antenne 9000 sans battement sur les ondes depuis environ six minutes
+          description: >-
+            Même contrôle qu'à l'antenne principale, port 9000 : docker compose
+            ps radio-azawan, puis curl -s http://127.0.0.1:9000/7.html (le
+            deuxième champ vaut 1 quand la source est branchée), puis docker
+            compose logs --since 30m radio-azawan. Attention : cette antenne peut
+            être légitimement arrêtée par la grille, vérifier la case du jour dans
+            docker/radio/grid.yaml avant d'improviser.
+      - uid: radio-nayda-ne-joue-plus
+        title: Radio Nayda — plus aucun titre ne passe à l'antenne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="radio-nayda"} |= "[HEARTBEAT]" |= " on_air=1 " [5m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: OK
+        for: 1m
+        labels:
+          severity: critical
+          team: radio
+          station: nayda
+        annotations:
+          summary: Antenne 9100 sans battement sur les ondes depuis environ six minutes
+          description: >-
+            Même contrôle qu'à l'antenne principale, port 9100 : docker compose
+            ps radio-nayda, puis curl -s http://127.0.0.1:9100/7.html (le
+            deuxième champ vaut 1 quand la source est branchée), puis docker
+            compose logs --since 30m radio-nayda. Cette antenne peut être
+            légitimement arrêtée par la grille : vérifier la case du jour dans
+            docker/radio/grid.yaml avant d'improviser.
+
+      # ---------------------------------------------------------------------
+      # Signaux qui valent pour les quatre antennes à la fois : le label
+      # « service » rendu par « sum by (service) » distingue les instances, et
+      # le groupement par alertname réunit les antennes touchées dans un seul
+      # mail. Pour ceux-là, l'absence de série veut dire « rien ne s'est passé »
+      # et donc « tout va bien » : noDataState est OK.
+      # ---------------------------------------------------------------------
+      - uid: radio-source-hachee
+        title: La source d'une antenne est coupée ou refusée
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum by (service) (count_over_time({service=~"radio-.+"} |~ "source disconnected|source rejected|Stream In Use|Metadata update rejected" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [3] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: warning
+          team: radio
+        annotations:
+          summary: Plus de trois coupures ou rejets de source en un quart d'heure
+          description: >-
+            Le DNAS et sc_trans ne sont pas d'accord. Trois chaînes de lignes
+            existent et sont distinctes : « Shoutcast 1 source rejected. A source
+            is already connected » (deux sourceurs, en général un sc_trans qui
+            redémarre pendant que l'ancien n'est pas encore lâché), « Shoutcast 1
+            source disconnected » (le sourceur part) et « Stream In Use » (la
+            réponse du DNAS quand sc_trans essaie de reprendre la place). Un
+            reload planifié par la grille en produit UN par antenne : le seuil à
+            trois laisse la marge. S'il est dépassé, l'antenne bascule entre deux
+            états et le battement finira par sonner : regarder docker compose
+            logs --since 30m <station>.
+      - uid: radio-playlist-a-sec
+        title: Une antenne n'a plus rien à jouer
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum by (service) (count_over_time({service=~"radio-.+"} |~ "Ran out of songs|No entries found in playlist|titre de la playlist accessibles|0 titre sur" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 2m
+        labels:
+          severity: critical
+          team: radio
+        annotations:
+          summary: Playlist vide ou discothèque mal montée
+          description: >-
+            Quatre chaînes possibles : « [MAIN] Ran out of songs!!! » (la liste
+            est épuisée et sc_trans ne la recharge pas), « No entries found in
+            playlist! ABORTING » (le fichier .lst est vide ou illisible) et les
+            deux messages du garde-fou d'entrée en matière, « radio: 0 titre sur
+            N lisibles sous /data/radio_content » et « radio: X/Y titres de la
+            playlist accessibles ». Le premier veut dire que le montage de la
+            discothèque a bougé ou que la base ne correspond plus aux fichiers :
+            vérifier « docker volume inspect », le chemin /data/radio_content et
+            la case de la grille jouée à cette heure.
+      - uid: radio-fichiers-illisibles
+        title: Une antenne n'arrive pas à décoder ses fichiers
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum by (service) (count_over_time({service=~"radio-.+"} |~ "Error opening decoder|nitializing encoder|Error in block selecting" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [2] }
+        noDataState: OK
+        execErrState: OK
+        for: 2m
+        labels:
+          severity: warning
+          team: radio
+        annotations:
+          summary: Des fichiers de la discothèque ne se lisent pas
+          description: >-
+            sc_trans signale un fichier qu'il ne peut pas décoder. Le motif
+            « nitializing encoder » est écrit sans le « i » initial : c'est la
+            faute de frappe du binaire (« Error intializing encoder »), pas la
+            nôtre, et elle est dans les logs réels. Au-delà de deux par quart
+            d'heure, la playlist est polluée de fichiers tronqués ou dans un
+            format que l'encodeur MP3 ne prend pas ; le morceau sauté est
+            remplacé par le suivant, l'auditeur entend une coupure. Lister les
+            chemins fautifs dans les logs de la station et contrôler la taille
+            des fichiers sous /data/radio_content.
+      - uid: radio-antenne-avale-ses-fichiers
+        title: Une antenne avale ses fichiers sans les jouer
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum by (service) (count_over_time({service=~"radio-.+"} |~ "\\[DECODE\\] Opened" [5m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [240] }
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        labels:
+          severity: warning
+          team: radio
+        annotations:
+          summary: Plus de 240 fichiers ouverts en cinq minutes
+          description: >-
+            Le battement est là, mais à un débit qui n'a plus de sens : un
+            morceau dure quelques minutes, une antenne qui ouvre plus de 240
+            fichiers en cinq minutes joue donc des fichiers quasi vides. Cas
+            rencontré sur ce poste (fichiers de démonstration d'une seconde) et
+            cas réel d'une discothèque remplacée par des fichiers de 0 octet ou
+            d'en-tête sans données. Le flux est « vivant » pour le DNAS et
+            inaudible pour l'auditeur. Vérifier « find /data/radio_content -size
+            -10k » et la taille moyenne des titres de la playlist jouée.
+      - uid: radio-processus-tue
+        title: Un processus d'antenne est mort de lui-même
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum by (service) (count_over_time({service=~"radio-.+"} |~ "exited: .*not expected|entered FATAL state" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: radio
+        annotations:
+          summary: supervisord a perdu un programme ou a renoncé à le relancer
+          description: >-
+            Deux chaînes de supervisord, dans l'ordre de gravité : « exited:
+            sc_trans (pid N) exited with exit code N (not expected) » (le
+            programme est mort et repart, la coupure d'antenne dure quelques
+            secondes) et « gave up: sc_trans entered FATAL state, too many start
+            retries too quickly » (supervisord renonce : l'antenne ne repartira
+            plus toute seule). Le second est une panne durable ; le premier,
+            répété, annonce le second. Remplace chk_radio.py du serveur
+            physique, dont ce conteneur a repris le rôle.
+      - uid: radio-auditeurs-refuses
+        title: Une antenne est pleine et refuse des auditeurs
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum by (service) (count_over_time({service=~"radio-.+"} |~ "HTTP client connection rejected|Max users reached" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [30] }
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        labels:
+          severity: warning
+          team: radio
+        annotations:
+          summary: Plus de trente refus d'auditeurs en un quart d'heure
+          description: >-
+            Le DNAS refuse du monde au-delà de MaxUser (720 pour yabiladi, azawan
+            et nayda, 200 pour chaabi, valeur de production reprise dans
+            docker/radio/conf/sc_serv.conf.tpl). Ce n'est pas une panne : c'est
+            une capacité à revoir, ou une pointe à signer. Un ou deux refus sont
+            normaux, d'où le seuil de trente. Comparer avec le panneau
+            « Sessions d'écoute ouvertes » du dashboard d'audience pour voir si
+            la courbe de pointe est réelle ou si un robot d'indexation boucle sur
+            listen.pls.

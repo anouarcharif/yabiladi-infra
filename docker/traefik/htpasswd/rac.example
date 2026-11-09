@@ -1,0 +1,13 @@
+# Gabarit du compte du routeur « rac » (traefik.http.middlewares.rac-htpasswd,
+# compose.yaml). Fichier séparé de user_yabiladi parce que le bac à sable a ses
+# propres identifiants : révoquer l'un ne coupe pas l'autre.
+#
+# Le vrai fichier ne se versionne pas : il est scellé chiffré dans
+# deploy/secrets/htpasswd_rac.sops.bin et reposé par deploy.sh.
+#
+#   bash docker/traefik/generate-htpasswd.sh rac <compte> <motdepasse>
+#   ./deploy.sh --encrypt
+#   git add deploy/secrets/htpasswd_rac.sops.bin && git commit && git push
+#
+# Même contrainte que pour les autres comptes : bcrypt ($2y$) uniquement.
+compte-a-remplacer:$2y$05$biTVv5TThaKyqmIZeB5Vyelv5Rw5YZjgTBxNcRqRoKu7nKMQy7t1y
