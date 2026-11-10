@@ -115,25 +115,29 @@ const NAMES = {
 // job orpheline donc ses archives aussi sûrement que le supprimer.
 //
 // « schedule » : quatre minutes d'écart, du plus lourd au plus léger, de 04:00
-// à 04:36. Les deux créneaux laissés libres le 2026-11-09 par le retrait des
+// à 04:32. Les deux créneaux laissés libres le 2026-11-09 par le retrait des
 // jobs « scripts » et « prayer-pdfs » ont été reboutés, et l'instance en place a
 // été réalignée dans la foulée — l'amorçage, lui, ne touche jamais une
-// planification déjà créée (elle appartient à l'interface). Un écartement ne
-// sérialise rien — « media » court encore quand « logs » démarre —, il baisse
-// seulement le pic de lectures simultanées sur le NFS de destination. Le « créneau
-// du dump SQL » invoqué ici jusqu'au 2026-11-09 n'existe plus : la base part à
-// 02:00 par le DAG « mariadb_fetch », avant toute la série, et son archivage la
-// ferme. Mesuré sur le poste de développement, donc sans valeur de débit : la
-// cible a 16 cœurs et lit la MariaDB à distance, les durées réelles se liront sur
-// le serveur.
+// planification déjà créée (elle appartient à l'interface). Le même mouvement
+// ferme le trou de 04:04 laissé par « logs » le 2026-11-09 : « var/log » est
+// sorti du périmètre (les journaux Symfony ne sont pas une donnée à restaurer),
+// et la planification des jobs restants se décale d'autant sur une machine
+// neuve. Sur une instance déjà amorcée, ces minutes restent celles de
+// l'interface : le décalage se décide dans « Jobs », job par job. Un écartement
+// ne sérialise rien — « media » court encore quand le suivant démarre —, il
+// baisse seulement le pic de lectures simultanées sur le NFS de destination. Le
+// « créneau du dump SQL » invoqué ici jusqu'au 2026-11-09 n'existe plus : la
+// base part à 02:00 par le DAG « mariadb_fetch », avant toute la série, et son
+// archivage la ferme. Mesuré sur le poste de développement, donc sans valeur de
+// débit : la cible a 16 cœurs et lit la MariaDB à distance, les durées réelles
+// se liront sur le serveur.
 const FILE_JOBS = [
-  { name: "Fichiers - media", path: "media", schedule: "0 4 * * *", label: "médias téléversés (public/files)" },
-  { name: "Fichiers - logs", path: "logs", schedule: "4 4 * * *", label: "journaux Symfony (var/log)" },
-  { name: "Fichiers - editor-images", path: "editor-images", schedule: "8 4 * * *", label: "images insérées par l'éditeur (public/img)" },
-  { name: "Fichiers - traefik-config", path: "traefik-config", schedule: "12 4 * * *", label: "autorité et certificats auto-signés (docker/traefik)" },
+  { name: "Fichiers - media", path: "media", schedule: "0 4 * * *", label: "médias téléversés (webroot/files)" },
+  { name: "Fichiers - editor-images", path: "editor-images", schedule: "4 4 * * *", label: "images insérées par l'éditeur (webroot/img)" },
+  { name: "Fichiers - traefik-config", path: "traefik-config", schedule: "8 4 * * *", label: "autorité et certificats auto-signés (docker/traefik)" },
   // Le montage du volume ACME est « docker/traefik-acme » ; le nom du job, lui,
   // ne prend pas de barre oblique — ce serait un sous-dossier sur le dépôt.
-  { name: "Fichiers - traefik-acme", path: "docker/traefik-acme", schedule: "16 4 * * *", label: "certificats ACME (volume traefik_acme)" },
+  { name: "Fichiers - traefik-acme", path: "docker/traefik-acme", schedule: "12 4 * * *", label: "certificats ACME (volume traefik_acme)" },
   // Les quatre suivants naissent désactivés : les trois applications voisines ne
   // sont pas encore servies et la MariaDB n'est pas encore équipée de son
   // mariabackup, leurs dossiers n'ont donc rien à archiver chaque nuit. Le job
@@ -141,7 +145,7 @@ const FILE_JOBS = [
   // depuis « Jobs » après y avoir associé un profil de chiffrement.
   // L'amorçage ne rallume jamais un job existant ; une machine neuve doit donc
   // reproduire cet état, d'où le drapeau ici plutôt qu'une action manuelle.
-  { name: "Fichiers - mediakit-img", path: "mediakit/public/img", schedule: "20 4 * * *", label: "visuels du catalogue mediakit (public/img)", enabled: false },
+  { name: "Fichiers - mediakit-img", path: "mediakit/public/img", schedule: "16 4 * * *", label: "visuels du catalogue mediakit (public/img)", enabled: false },
   // « public/uploads » couvre les documents de projets et les images des
   // incidents ; « var/bc_files » porte les bons de commande téléversés. Deux
   // jobs, donc deux archives et deux lignes de statut, comme pour les autres
@@ -149,22 +153,22 @@ const FILE_JOBS = [
   // jointe manquante. Le second suit le défaut de BC_PATH
   // (%kernel.project_dir%/var/bc_files) ; un chemin absolu sur le serveur
   // demanderait son propre montage.
-  { name: "Fichiers - facturation-uploads", path: "facturation/public/uploads", schedule: "24 4 * * *", label: "pièces jointes de l'intranet (public/uploads)", enabled: false },
-  { name: "Fichiers - facturation-bc", path: "facturation/var/bc_files", schedule: "28 4 * * *", label: "bons de commande de l'intranet (var/bc_files)", enabled: false },
+  { name: "Fichiers - facturation-uploads", path: "facturation/public/uploads", schedule: "20 4 * * *", label: "pièces jointes de l'intranet (public/uploads)", enabled: false },
+  { name: "Fichiers - facturation-bc", path: "facturation/var/bc_files", schedule: "24 4 * * *", label: "bons de commande de l'intranet (var/bc_files)", enabled: false },
   // Backup MariaDB physique (mariabackup) : 60GB de données, backup à chaud
   // sans downtime. Le job est désactivé en attendant la préparation du serveur
   // MariaDB (installation de mariabackup, déploiement des scripts, cron).
   // Une fois prêt : activer depuis l'interface Jobs, après avoir associé un
   // profil de chiffrement (recommandé pour les backups de base de données).
   // Voir scripts/backup/README.md pour la procédure complète.
-  { name: "Fichiers - mariadb-physical", path: "mariadb-backups", schedule: "32 4 * * *", label: "backups physiques MariaDB (mariabackup, 60GB → ~15GB compressés)", enabled: false },
+  { name: "Fichiers - mariadb-physical", path: "mariadb-backups", schedule: "28 4 * * *", label: "backups physiques MariaDB (mariabackup, 60GB → ~15GB compressés)", enabled: false },
   // La discothèque des antennes : 9 Go mesurés sur le poste de développement,
   // et le contenu du site qui ne se régénère pas — il n'est ni dans git ni
   // dans les bases. Activé d'emblée, contrairement aux quatre jobs désactivés
   // d'à côté : ici la donnée est déjà en service. GZIP sur des MP3 ne gagne
   // presque rien, mais c'est le défaut de la maison et le « media » téléversé le
   // partage ; un réglage job par job se décide dans l'interface.
-  { name: "Fichiers - radio-content", path: "radio-content", schedule: "36 4 * * *", label: "discothèque des antennes (data/radio_content)" },
+  { name: "Fichiers - radio-content", path: "radio-content", schedule: "32 4 * * *", label: "discothèque des antennes (data/radio_content)" },
 ];
 
 // Les réglages que l'interface applique d'elle-même et que « POST /api/jobs »
@@ -205,7 +209,10 @@ const EXCLUDES = [
   "**/vendor/**",
   "**/chromium/**",
   // Journaux legacy gonflés par des cron V1 toujours actifs. Pas de « *.log » en
-  // bloc : var/log, monté sous /backup/logs, est une donnée à conserver.
+  // bloc : ces six motifs sont nommés un par un, et une règle globale écarterait
+  // sans le dire n'importe quel journal tombé dans un dossier média. (« var/log »
+  // du site est sorti du périmètre le 2026-11-09 — il n'est plus monté sous
+  // /backup, donc rien ici n'a plus à protéger des journaux Symfony.)
   "**/pages_cache.log",
   "**/generate.log",
   "**/radio_footer.log",

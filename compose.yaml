@@ -39,9 +39,11 @@ name: yabiladi-infra
 # Les chemins « ./docker/… » et « ./tools/… » de ce fichier supposent les
 # déménagements faits par « git mv » depuis le site : docker/{traefik,alloy,loki,
 # grafana,prometheus,postfix,secrets,dbackup} et tools/{backup,logging}. Les
-# montages qui désignent une donnée du site (médias, images de l'éditeur,
-# journaux Symfony) passent par ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony} : la
-# machine n'a rien à reconfigurer tant que les dépôts restent frères, et une
+# montages qui désignent une donnée du site ne passent plus par une racine de
+# dépôt : les médias et les images de l'éditeur vivent dans l'arbre V1 encore en
+# service, hors du clone, et se déclarent par les deux variables du site
+# (SITE_MEDIA_HOST_PATH, SITE_EDITOR_IMAGES_HOST_PATH). Les dépôts voisins
+# restent désignés à leur racine (MEDIAKIT_HOST_DIR, FACTURATION_HOST_DIR) ; une
 # arborescence différente se déclare dans .env.local (publié au shell par
 # deploy.sh avant l'appel à Compose).
 # ============================================================================
@@ -192,8 +194,9 @@ services:
       # premier déploiement. L'adresse de contact du serveur (`webmaster@yabiladi.com`)
       # est versionnée dans `.env` : Let's Encrypt n'avertit qu'elle quand un
       # renouvellement tourne mal. Quota officiel : 50 certificats par domaine
-      # enregistré et par 7 jours ; la pile en demande 6 (site, rac, dagu, grafana,
-      # dashboard, backups).
+      # enregistré et par 7 jours ; la pile en demande 7 (site, rac, dagu,
+      # grafana, dashboard, backups, navidrome — le dernier vient d'ajouter le
+      # nom « navidrome.yabiladi.com », et son routeur vit dans le dépôt du site).
       - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
@@ -297,12 +300,16 @@ services:
       # tar puis chiffrer puis renommer sur place est coûteux ; le dossier
       # tampon reste donc dans un volume nommé (voir dbackup_tmp).
       TMPDIR: /tmp
-      # Accès à la base de production pour le job « Base de données » de la
+      # Accès à la base de production pour l'adaptateur « Base de données » de la
       # console, déclaré avec les noms du dépôt (DB_DUMP_*) : mêmes variables,
       # mêmes sources (.env versionné, .env.local sur la machine) que ce que
       # lisait le DAG de dump SQL, donc rien à renseigner deux fois sur une
-      # machine. L'amorçage (tools/backup/dbackup-bootstrap.mjs) s'en sert pour
-      # l'adaptateur MariaDB, l'identifiant et la liste des bases.
+      # machine.
+      # Depuis le 2026-11-09 la sauvegarde de la base n'est plus ce chemin :
+      # c'est mariabackup, piloté par le DAG Dagu « mariadb_fetch » côté site, et
+      # l'amorçage ne déclare plus d'adaptateur MariaDB. Ces variables restent
+      # pour un job SQL que la console créerait à la main depuis son interface —
+      # l'API ne sait pas le faire.
       DB_DUMP_HOST: ${DB_DUMP_HOST:-}
       DB_DUMP_PORT: "${DB_DUMP_PORT:-}"
       DB_DUMP_USER: ${DB_DUMP_USER:-}
@@ -352,9 +359,10 @@ services:
       ### sources sauvegardées (lecture seule) ###
       # Sous « /backup », la racine que déclare l'amorçage (« SOURCE_BASE » de
       # tools/backup/dbackup-bootstrap.mjs) : depuis le 2026-11-02 chaque montage
-      # a son job, qui le désigne par un nom relatif — « media », « logs », ou
-      # « docker/traefik-acme » pour le volume ACME. Le nom du job, lui, ne prend
-      # jamais de barre oblique : c'est le nom du dossier d'archives sur le dépôt.
+      # a son job, qui le désigne par un nom relatif — « media »,
+      # « editor-images », ou « docker/traefik-acme » pour le volume ACME. Le
+      # nom du job, lui, ne prend jamais de barre oblique : c'est le nom du
+      # dossier d'archives sur le dépôt.
       # Un autre chemin ferait une source introuvable, donc un job « partiel » ou
       # en échec chaque nuit.
       # Et jamais sous « /data » : « docker-entrypoint.sh » de l'image fait
@@ -366,17 +374,23 @@ services:
       # system », puis « Exited (1) », la console ne démarrait plus.
       # Médias téléversés par les utilisateurs : la seule donnée que git et les
       # bases ne contiennent pas (avatars, albums, communiqués, coran, concours).
-      # Chemin croisé : la donnée appartient au site, la console vit ici. Le nom
-      # de destination (« /backup/media ») ne change pas — c'est le nom du job
-      # DBackup et donc celui du dossier d'archives sur le dépôt ; seuls les
-      # montages dbackup passent désormais par SITE_HOST_DIR.
-      - ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/public/files:/backup/media:ro
+      # Chemin croisé, et il ne passe plus par une racine de dépôt : depuis le
+      # 2026-11-09 les médias du site vivent dans l'arbre que la V1 sert encore,
+      # hors du clone (/home/yabiladi/www/app/webroot/files). C'est la VARIABLE DU
+      # SITE — celle que son compose.yaml monte par-dessus public/files pour php
+      # et nginx — reprise ici à la même valeur de serveur dans les deux .env
+      # versionnés : rien ne dépend d'un .env.local rempli, et « prepare_backups »
+      # avertit si l'une des deux désigne malgré tout l'arbre du dépôt. Le nom de
+      # destination (« /backup/media ») ne change pas : c'est le nom du job DBackup
+      # et donc celui du dossier d'archives sur le dépôt.
+      - ${SITE_MEDIA_HOST_PATH:-/home/yabiladi/www/app/webroot/files}:/backup/media:ro
       # Images insérées par le gestionnaire de fichiers de l'éditeur (articles,
-      # communiqués, tribunes) : « public/img/assets », avec leurs vignettes dans
-      # « public/img/thumbs ». Depuis la reprise du gestionnaire, la rédaction y
-      # téléverse chaque jour ; le contenu vient aussi de la V1, et il n'existe
-      # ni dans git ni dans les bases.
-      - ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/public/img:/backup/editor-images:ro
+      # communiqués, tribunes) : « assets », avec leurs vignettes dans « thumbs »
+      # et le « content » des pages dont l'éditeur est plus ancien. Depuis la
+      # reprise du gestionnaire, la rédaction y téléverse chaque jour ; le
+      # contenu vient aussi de la V1, et il n'existe ni dans git ni dans les
+      # bases. Même variable croisée que les médias, même arbre hors dépôt.
+      - ${SITE_EDITOR_IMAGES_HOST_PATH:-/home/yabiladi/www/app/webroot/img}:/backup/editor-images:ro
       # Dépôts des applications voisines, montés à leur racine et non sur le
       # seul sous-dossier sauvegardé. Si l'application n'est pas encore clonée,
       # Docker ne crée alors qu'un dossier vide : le « git clone » du jour J y
@@ -387,12 +401,8 @@ services:
       # « facturation/var/bc_files » de l'autre. Les trois sont créés
       # désactivés (tools/backup/dbackup-bootstrap.mjs) et s'activent à la
       # bascule de leur application.
-      - ${MEDIAKIT_HOST_DIR:-../Yabiladi-Mediakit-V2}:/backup/mediakit:ro
-      - ${FACTURATION_HOST_DIR:-../Yabiladi-Facturation-V2}:/backup/facturation:ro
-      # Journaux Symfony : seul var/ qui ne se régénère pas. Là encore croisé :
-      # c'est le var/log du site que les projets écrivent, et le job « logs »
-      # n'a rien à savoir du dépôt qui le déclare.
-      - ${SITE_HOST_DIR:-../Yabiladi-V2-Symfony}/var/log:/backup/logs:ro
+      - ${MEDIAKIT_HOST_DIR:-/opt/yabiladi-mediakit}:/backup/mediakit:ro
+      - ${FACTURATION_HOST_DIR:-/opt/yabiladi-facturation}:/backup/facturation:ro
       # Certificats ACME : sans eux, le domaine est en erreur TLS jusqu'au
       # renouvellement. Volume nommé, monté ici en lecture seule. Le fichier
       # acme.json est posé par Traefik en 0600 root:root ; deploy.sh le rend
@@ -405,24 +415,23 @@ services:
       # l'utilisateur 1001 de la console, et leur source de vérité est le coffre,
       # qui les redéploie.
       #
-      # Chemin RESTÉ relatif à ce dépôt, et non à SITE_HOST_DIR : « docker/traefik »
-      # (dynamic.yml, certs/, htpasswd/, generate-cert.sh) est déplacé dans
-      # l'infrastructure par le même mouvement que les services traefik et
-      # dbackup. Le point de montage, « /backup/traefik-config », ne change pas
-      # d'un octet : c'est le nom du job, donc le nom du dossier d'archives sur
-      # le dépôt et la chaîne de rétention attachée. Pointer ici le dépôt du site
-      # archivait un dossier vide après le « git mv », sans le dire — le job se
-      # signalerait « partiel » chaque nuit. Si une machine garde malgré tout un
-      # « docker/traefik » côté site (déménagement repoussé), la ligne
-      # « ${SITE_HOST_DIR:-…}/docker/traefik:/backup/site-traefik-config:ro »
-      # peut être ajoutée ici sans toucher au job existant.
+      # Chemin RESTÉ relatif à ce dépôt : « docker/traefik » (dynamic.yml, certs/,
+      # htpasswd/, generate-cert.sh) est déplacé dans l'infrastructure par le même
+      # mouvement que les services traefik et dbackup. Le point de montage,
+      # « /backup/traefik-config », ne change pas d'un octet : c'est le nom du job,
+      # donc le nom du dossier d'archives sur le dépôt et la chaîne de rétention
+      # attachée. Pointer ici le dépôt du site archivait un dossier vide après le
+      # « git mv », sans le dire — le job se signalerait « partiel » chaque nuit.
       - ./docker/traefik:/backup/traefik-config:ro
       # Backups physiques MariaDB (mariabackup) : 60GB de données compressées en
       # ~15GB. Le DAG Dagu « mariadb_fetch » (02:00) se connecte en SSH au serveur
       # MariaDB, exécute mariabackup-daily.sh, et dépose les archives .zst dans ce
-      # dossier. DBackup les archive ensuite vers le NFS via le job "Fichiers -
-      # mariadb-physical" (04:40). Dossier partagé entre Dagu (écriture) et DBackup
-      # (lecture seule). Chemin hôte : /data/backup/mariadb (production).
+      # dossier. DBackup les archive ensuite vers le NFS via le job « Fichiers -
+      # mariadb-physical » (04:28). Dossier partagé entre Dagu (écriture, dans LE
+      # DÉPÔT DU SITE — c'est son conteneur qui porte le DAG) et DBackup (lecture
+      # seule). D'où la valeur absolue du .env versionné des deux côtés : deux
+      # défauts relatifs identiques dans deux dépôts ne désignent pas le même
+      # dossier, et le job archivait un répertoire vide en se disant « réussi ».
       # Configuration : voir scripts/backup/README.md.
       - ${MARIADB_BACKUP_HOST_PATH:-/data/backup/mariadb}:/backup/mariadb-backups:ro
       # Discothèque des quatre antennes : les MP3 que lisent sc_trans et le
@@ -432,12 +441,11 @@ services:
       # l'arbre qui joue l'antenne, et non un second chemin à tenir à jour.
       # Lecture seule ici aussi : une source ne s'écrit jamais.
       #
-      # Ici, la variable ne peut plus avoir le même défaut que le montage du
-      # site : la discothèque vit sous l'autre dépôt. Le .env de l'infrastructure
-      # la déclare donc en « ../Yabiladi-V2-Symfony/data/radio_content » ; le
-      # repli écrit ci-dessous reste celui de l'ancien fichier et ne sert que si
-      # la variable manque — il créerait alors un dossier vide dans CE dépôt,
-      # archivé à vide chaque nuit, sans erreur.
+      # Ici encore, le repli écrit ci-dessous ne sert que si la variable manque —
+      # la discothèque vit sous le dépôt du site, pas sous celui-ci — et il créerait
+      # alors un dossier vide dans CE dépôt, archivé à vide chaque nuit, sans
+      # erreur. Le .env versionné porte la valeur du serveur (/data/radio_content),
+      # la même que celle du dépôt du site.
       - ${RADIO_CONTENT_HOST_PATH:-./data/radio_content}:/backup/radio-content:ro
     ports:
       - "127.0.0.1:${DBACKUP_HTTP_PORT:-8087}:3000"

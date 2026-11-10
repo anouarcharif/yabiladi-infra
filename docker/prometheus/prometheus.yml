@@ -92,11 +92,20 @@ scrape_configs:
   # « service » d'Alloy dans Loki (« nginx », « php », « grafana ») : les deux
   # piles nomment les services identiquement.
   #
-  # « yabiladi- » est un nom de projet écrit en dur, comme le label
-  # « traefik.docker.network=yabiladi_app » de compose.yaml — il est fixé par
-  # « name: yabiladi » en tête de ce fichier. Le regex le rend OPTIONNEL, pour
-  # qu'un conteneur lancé hors de la stack (« factudb-1 », une sonde ponctuelle)
-  # reçoive tout de même une étiquette plutôt qu'aucune.
+  # Les noms de projet sont écrits en dur, comme le label
+  # « traefik.docker.network=yabiladi_app » de compose.yaml : depuis le
+  # découpage en quatre projets Compose (2026-11-09), le conteneur s'appelle
+  # « yabiladi-symfony-php-1 » et non plus « yabiladi-php-1 ». Couper seulement
+  # « yabiladi- » laissait donc « symfony-php » dans le label — et les dix
+  # règles « conteneur arrêté » comme les panneaux filtrant « php », « nginx »,
+  # « loki » ne matchaient plus rien : mesuré le 2026-11-10, les dix règles en
+  # Alerting depuis la veille alors que toute la pile tournait.
+  #
+  # Le projet est donc coupé avec son nom complet (« yabiladi-infra-loki-1 » →
+  # « loki »), et le préfixe reste OPTIONNEL, pour qu'un conteneur lancé hors
+  # de ces projets (« factudb-1 », une sonde ponctuelle) reçoive tout de même
+  # une étiquette plutôt qu'aucune. Un cinquième projet Compose devra être
+  # ajouté ici, sinon ses services porteront « nom-du-projet-nom-du-service ».
   - job_name: docker
     static_configs:
       - targets: ["cadvisor:8080"]
@@ -109,6 +118,6 @@ scrape_configs:
       # et reste sans étiquette « service » : les panneaux groupés par service
       # ignorent ce que la stack ne déclare pas, au lieu d'inventer un groupe.
       - source_labels: [name]
-        regex: "^(?:yabiladi-)?(.+)-[0-9]+$"
+        regex: "^(?:yabiladi-(?:infra|symfony|facturation|mediakit)-|yabiladi-)?(.+)-[0-9]+$"
         target_label: service
         replacement: "$1"

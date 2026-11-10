@@ -104,9 +104,9 @@ compose_value() { # $1 clé, $2 défaut
 # les voie. C'est la seule voie qui existe : l'ordre réel d'interpolation de
 # Compose est « shell, puis .env » (mesuré, et son schéma refuse un
 # « env_file » de premier niveau). Sans ce bloc, le serveur qui déclarerait
-# DBACKUP_DEST_HOST_PATH, SITE_HOST_DIR ou LOGGING_HOST_DATA_PATH dans son
-# .env.local monterait les replis du .env versionné — et « prepare_backups »
-# irait préparer des dossiers que personne ne regarde.
+# DBACKUP_DEST_HOST_PATH, SITE_MEDIA_HOST_PATH ou LOGGING_HOST_DATA_PATH dans
+# son .env.local monterait les replis du .env versionné — et
+# « prepare_backups » irait préparer des dossiers que personne ne regarde.
 #
 # Lecture ligne à ligne, jamais « source » : une valeur de DSN contient « ? »,
 # « # », des « & » et des guillemets ; le shell l'évaluerait ou casserait sur
@@ -390,15 +390,15 @@ prepare_backups() {
         esac
     done
 
-    # Les dépôts dont la console archive le contenu : le site (médias, images de
-    # l'éditeur, journaux Symfony, via SITE_HOST_DIR) et les deux applications
-    # voisines. Eux peuvent manquer légitimement — une application pas encore
-    # basculée, un site dont le dépôt est ailleurs sur cette machine —, mais un
-    # montage dont la source manque est créé vide par Docker : le job n'archiverait
-    # rien et se dirait « réussi ». D'où l'avertissement plutôt que l'erreur, avec
-    # la clé à poser.
+    # Les racines hors de CE dépôt que la console archive : les deux dépôts
+    # voisins, les données du site et le contenu des antennes. Elles peuvent
+    # manquer légitimement — une application pas encore basculée, des médias dont
+    # l'arbre vit ailleurs sur cette machine —, mais un montage dont la source
+    # manque est créé vide par Docker : le job n'archiverait rien et se dirait
+    # « réussi ». D'où l'avertissement plutôt que l'erreur, avec la clé à poser.
     local app cle_app
-    for cle_app in SITE_HOST_DIR MEDIAKIT_HOST_DIR FACTURATION_HOST_DIR; do
+    for cle_app in MEDIAKIT_HOST_DIR FACTURATION_HOST_DIR RADIO_CONTENT_HOST_PATH \
+                   SITE_MEDIA_HOST_PATH SITE_EDITOR_IMAGES_HOST_PATH; do
         app="$(compose_value "$cle_app" "")"
         [ -n "$app" ] || continue
         case "$app" in
@@ -406,22 +406,24 @@ prepare_backups() {
             ./*) app="$REPO/${app#./}" ;;
             *) app="$REPO/$app" ;;
         esac
-        [ -d "$app" ] || log "  · ATTENTION : $cle_app = « $app » n'existe pas — cloner le dépôt, ou déclarer son emplacement absolu dans .env.local (sur la machine cible : /var/yabiladi, /var/mediakit, /var/facturation). Les jobs qui lisent cette racine n'archiveront rien."
+        [ -d "$app" ] || log "  · ATTENTION : $cle_app = « $app » n'existe pas — déclarer l'emplacement réel dans .env.local (gabarit : deploy/secrets/env.local.example), re-sceller le coffre, puis relancer. Les jobs qui lisent cette racine n'archiveront rien."
     done
 
-    # Le site n'est pas une option ici : ses médias et ses journaux sont deux
-    # jobs réels, et un SITE_HOST_DIR mal placé se voit mieux maintenant qu'à
-    # quatre heures du matin dans un rapport de sauvegarde.
-    local site
-    site="$(compose_value SITE_HOST_DIR ../Yabiladi-V2-Symfony)"
-    case "$site" in
-        /*) ;;
-        ./*) site="$REPO/${site#./}" ;;
-        *) site="$REPO/$site" ;;
+    # « media » et « editor-images » ne désignent pas le dépôt du site : depuis la
+    # bascule, les écritures de PHP — médias et dossier de l'éditeur TinyMCE —
+    # restent sous le webroot V1, toujours en service, que le site relaie par deux
+    # bind mounts. Un chemin qui se termine par « public/files » ou « public/img »
+    # est le repli de développement : la console archiverait alors des fichiers
+    # versionnés, jamais les données des membres.
+    local media editor
+    media="$(compose_value SITE_MEDIA_HOST_PATH /home/yabiladi/www/app/webroot/files)"
+    editor="$(compose_value SITE_EDITOR_IMAGES_HOST_PATH /home/yabiladi/www/app/webroot/img)"
+    case "$media" in */public/files)
+        log "  · ATTENTION : SITE_MEDIA_HOST_PATH = « $media » est l'arbre du dépôt, pas le webroot V1 — le job « media » archiverait les fichiers gitignorés du site, pas les médias des membres." ;;
     esac
-    if [ ! -d "$site/public/files" ]; then
-        log "  · ATTENTION : pas de « public/files » sous SITE_HOST_DIR ($site) — le job « media » tournera à vide."
-    fi
+    case "$editor" in */public/img)
+        log "  · ATTENTION : SITE_EDITOR_IMAGES_HOST_PATH = « $editor » est l'arbre du dépôt, pas le webroot V1 — le job « editor-images » raterait les images publiées par l'éditeur." ;;
+    esac
 
     local dest
     dest="$(compose_value DBACKUP_DEST_HOST_PATH ./backup/archives)"
