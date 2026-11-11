@@ -182,9 +182,24 @@ services:
       - --providers.docker.exposedbydefault=false
       - --providers.file.filename=/etc/traefik/dynamic.yml
       - --entrypoints.web.address=:80
+      # « forwardedHeaders.trustedIPs » : sans cette ligne, Traefik REMPLACE le
+      # X-Forwarded-For reçu du visiteur par l'adresse de son propre pair TCP. Mesuré
+      # avant la correction, dans le journal d'accès de nginx : « 172.21.0.1 » pour
+      # une requête locale, et l'IP de sortie Cloudflare dès que le DNS passe par le
+      # proxy — donc un bannissement, un vote, un historique de connexion ou un pays
+      # GeoLite2 calculés sur une adresse partagée par des millions de visiteurs.
+      # Avec la liste, Traefik remonte XFF depuis la droite et s'arrête à la première
+      # adresse qu'il ne connaît pas : c'est celle du visiteur, et c'est ce qu'il
+      # transmet en amont. La liste est commentée dans « .env » ; le même jeu
+      # d'adresses est déclaré côté nginx (« set_real_ip_from »), les deux listes
+      # doivent rester identiques.
+      - --entrypoints.web.forwardedHeaders.trustedIPs=${TRAEFIK_TRUSTED_PROXY_IPS}
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
+      # Même déclaration sur l'entrée HTTPS : c'est par elle qu'entrent le site,
+      # les antennes radio et les consoles d'administration.
+      - --entrypoints.websecure.forwardedHeaders.trustedIPs=${TRAEFIK_TRUSTED_PROXY_IPS}
       # Résolveur ACME : tous les routeurs du fichier versionné le référencent,
       # mais le poste de développement vide leur label « tls.certresolver » dans
       # compose.override.yaml (non versionné). Rien ne demande donc de certificat
