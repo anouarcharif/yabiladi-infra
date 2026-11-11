@@ -60,7 +60,7 @@
  *    chaque retouche d'horaire. Le fichier de données, lui, se relit
  *    exactement comme il a été écrit ;
  *  - « --export » régénère « jobs.json » depuis l'instance en place (lecture
- *    seule, aucune écriture dans la console), et le DAG « supervision_ui_git_sync »
+ *    seule, aucune écriture dans la console), et le DAG « synchro_ihm_git »
  *    commite le résultat : un horaire déplacé à la souris dans « Jobs » devient
  *    un commit, et une machine neuve repart de ce commit.
  *

@@ -27,7 +27,7 @@
 #     « Cannot save provisioned dashboard » dans les deux cas, et la route
 #     unifiée (« PUT /apis/dashboard.grafana.app/v1/… », celle de l'éditeur)
 #     répond 200 sans toucher au fichier. Le fichier n'est donc PAS la sortie de
-#     l'interface : c'est le DAG « supervision_ui_git_sync » qui exporte la base
+#     l'interface : c'est le DAG « synchro_ihm_git » qui exporte la base
 #     vers « docker/grafana/dashboards » et commite le résultat ;
 #   - consequence de ce qui précède, vérifiée : une retouche en base n'est
 #     pas annulée par le fournisseur tant que le fichier ne bouge pas

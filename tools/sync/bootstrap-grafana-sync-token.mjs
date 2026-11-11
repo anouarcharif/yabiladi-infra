@@ -157,9 +157,21 @@ async function main() {
   }
 
   mkdirSync(dirname(SORTIE), { recursive: true });
+  // Fusion, pas réécriture : « SORTIE » est le fichier que le coffre scelle, et
+  // il porte quatre autres lignes (GIT_PUSH_TOKEN, GIT_PUSH_USER, le couple
+  // DBackup). Écrire le fichier depuis zéro les effaçait, et le scellement
+  // suivant partait d'un clair amputé. Le remplacement vise la seule ligne
+  // « GRAFANA_SYNC_TOKEN= » et laisse les autres octets en place ; la valeur
+  // s'insère par une fonction, sinon un « $ » d'un jeton serait lu comme une
+  // référence d'expression régulière.
+  const existant = existsSync(SORTIE) ? readFileSync(SORTIE, "utf8") : "";
+  const ligne = `GRAFANA_SYNC_TOKEN=${cle}`;
+  const prochain = /^GRAFANA_SYNC_TOKEN=.*$/m.test(existant)
+    ? existant.replace(/^GRAFANA_SYNC_TOKEN=.*$/m, () => ligne)
+    : `${existant}${existant === "" || existant.endsWith("\n") ? "" : "\n"}${ligne}\n`;
   const umask = process.umask(0o077);
   try {
-    writeFileSync(SORTIE, `GRAFANA_SYNC_TOKEN=${cle}\n`, { mode: 0o600 });
+    writeFileSync(SORTIE, prochain, { mode: 0o600 });
   } finally {
     process.umask(umask);
   }
