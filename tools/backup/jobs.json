@@ -1,0 +1,12 @@
+[
+  {"name":"Fichiers - media","path":"media","label":"médias téléversés (webroot/files)","schedule":"0 4 * * *"},
+  {"name":"Fichiers - editor-images","path":"editor-images","label":"images insérées par l'éditeur (webroot/img)","schedule":"8 4 * * *"},
+  {"name":"Fichiers - traefik-config","path":"traefik-config","label":"autorité et certificats auto-signés (docker/traefik)","schedule":"12 4 * * *"},
+  {"name":"Fichiers - traefik-acme","path":"docker/traefik-acme","label":"certificats ACME (volume traefik_acme)","schedule":"16 4 * * *"},
+  {"name":"Fichiers - mediakit-img","path":"mediakit/public/img","label":"visuels du catalogue mediakit (public/img)","schedule":"20 4 * * *"},
+  {"name":"Fichiers - facturation-uploads","path":"facturation/public/uploads","label":"pièces jointes de l'intranet (public/uploads)","schedule":"24 4 * * *"},
+  {"name":"Fichiers - facturation-bc","path":"facturation/var/bc_files","label":"bons de commande de l'intranet (var/bc_files)","schedule":"28 4 * * *"},
+  {"name":"Fichiers - mariadb-physical","path":"mariadb-backups","label":"backups physiques MariaDB (mariabackup, 60GB → ~15GB compressés)","schedule":"32 4 * * *","enabled":false},
+  {"name":"Fichiers - radio-content","path":"radio-content","label":"discothèque des antennes (data/radio_content)","schedule":"36 4 * * 0"},
+  {"name":"Fichiers - logs","path":"logs","label":"créé depuis l'interface","schedule":"4 4 * * *"}
+]

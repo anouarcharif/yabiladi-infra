@@ -49,9 +49,34 @@
  * seule, y figurent et sont même présélectionnées. L'outil déclare donc un
  * second adaptateur SOURCE sur /restore, le dossier de travail (voir
  * « NAMES.restore »).
+ *
+ * Le périmètre — la liste des jobs — ne vit plus ici : il est dans
+ * « tools/backup/jobs.json », un fichier de données versionné, une ligne par
+ * job. Deux raisons à ce déménagement, toutes deux mesurées sur 4.0.2 :
+ *
+ *  - ce que l'interface change sur un job (son horaire, son activation) ne
+ *    peut pas revenir dans git tant que la déclaration est une ligne de
+ *    JavaScript : personne ne veut d'un robot qui réécrit du code source à
+ *    chaque retouche d'horaire. Le fichier de données, lui, se relit
+ *    exactement comme il a été écrit ;
+ *  - « --export » régénère « jobs.json » depuis l'instance en place (lecture
+ *    seule, aucune écriture dans la console), et le DAG « supervision_ui_git_sync »
+ *    commite le résultat : un horaire déplacé à la souris dans « Jobs » devient
+ *    un commit, et une machine neuve repart de ce commit.
+ *
+ * Usage :
+ *   docker compose exec -T dbackup node /opt/backup-tools/dbackup-bootstrap.mjs
+ *   docker compose exec -T dbackup node /opt/backup-tools/dbackup-bootstrap.mjs --export \
+ *       --out /opt/backup-tools/jobs.json      # même commande, mode export
+ *   node tools/backup/dbackup-bootstrap.mjs --export --out tools/backup/jobs.json
+ *       # depuis n'importe où, avec DBACKUP_URL + les deux variables du compte
  */
 
-const BASE = `http://127.0.0.1:${process.env.PORT || 3000}`;
+import { readFileSync, writeFileSync } from "node:fs";
+
+// L'API de la console. En interne (le conteneur lui-même) le défaut suffit ;
+// l'export piloté depuis un autre conteneur passe par « DBACKUP_URL ».
+const BASE = (process.env.DBACKUP_URL || `http://127.0.0.1:${process.env.PORT || 3000}`).replace(/\/+$/, "");
 const ADMIN_EMAIL = process.env.DBACKUP_ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.DBACKUP_ADMIN_PASSWORD;
 
@@ -131,45 +156,40 @@ const NAMES = {
 // archivage la ferme. Mesuré sur le poste de développement, donc sans valeur de
 // débit : la cible a 16 cœurs et lit la MariaDB à distance, les durées réelles
 // se liront sur le serveur.
-const FILE_JOBS = [
-  { name: "Fichiers - media", path: "media", schedule: "0 4 * * *", label: "médias téléversés (webroot/files)" },
-  { name: "Fichiers - editor-images", path: "editor-images", schedule: "4 4 * * *", label: "images insérées par l'éditeur (webroot/img)" },
-  { name: "Fichiers - traefik-config", path: "traefik-config", schedule: "8 4 * * *", label: "autorité et certificats auto-signés (docker/traefik)" },
-  // Le montage du volume ACME est « docker/traefik-acme » ; le nom du job, lui,
-  // ne prend pas de barre oblique — ce serait un sous-dossier sur le dépôt.
-  { name: "Fichiers - traefik-acme", path: "docker/traefik-acme", schedule: "12 4 * * *", label: "certificats ACME (volume traefik_acme)" },
-  // Les quatre suivants naissent désactivés : les trois applications voisines ne
-  // sont pas encore servies et la MariaDB n'est pas encore équipée de son
-  // mariabackup, leurs dossiers n'ont donc rien à archiver chaque nuit. Le job
-  // existe pour que la bascule ne soit qu'un bouton — le jour J, on l'active
-  // depuis « Jobs » après y avoir associé un profil de chiffrement.
-  // L'amorçage ne rallume jamais un job existant ; une machine neuve doit donc
-  // reproduire cet état, d'où le drapeau ici plutôt qu'une action manuelle.
-  { name: "Fichiers - mediakit-img", path: "mediakit/public/img", schedule: "16 4 * * *", label: "visuels du catalogue mediakit (public/img)", enabled: false },
-  // « public/uploads » couvre les documents de projets et les images des
-  // incidents ; « var/bc_files » porte les bons de commande téléversés. Deux
-  // jobs, donc deux archives et deux lignes de statut, comme pour les autres
-  // dossiers : un bon de commande manquant ne doit pas se lire comme une pièce
-  // jointe manquante. Le second suit le défaut de BC_PATH
-  // (%kernel.project_dir%/var/bc_files) ; un chemin absolu sur le serveur
-  // demanderait son propre montage.
-  { name: "Fichiers - facturation-uploads", path: "facturation/public/uploads", schedule: "20 4 * * *", label: "pièces jointes de l'intranet (public/uploads)", enabled: false },
-  { name: "Fichiers - facturation-bc", path: "facturation/var/bc_files", schedule: "24 4 * * *", label: "bons de commande de l'intranet (var/bc_files)", enabled: false },
-  // Backup MariaDB physique (mariabackup) : 60GB de données, backup à chaud
-  // sans downtime. Le job est désactivé en attendant la préparation du serveur
-  // MariaDB (installation de mariabackup, déploiement des scripts, cron).
-  // Une fois prêt : activer depuis l'interface Jobs, après avoir associé un
-  // profil de chiffrement (recommandé pour les backups de base de données).
-  // Voir scripts/backup/README.md pour la procédure complète.
-  { name: "Fichiers - mariadb-physical", path: "mariadb-backups", schedule: "28 4 * * *", label: "backups physiques MariaDB (mariabackup, 60GB → ~15GB compressés)", enabled: false },
-  // La discothèque des antennes : 9 Go mesurés sur le poste de développement,
-  // et le contenu du site qui ne se régénère pas — il n'est ni dans git ni
-  // dans les bases. Activé d'emblée, contrairement aux quatre jobs désactivés
-  // d'à côté : ici la donnée est déjà en service. GZIP sur des MP3 ne gagne
-  // presque rien, mais c'est le défaut de la maison et le « media » téléversé le
-  // partage ; un réglage job par job se décide dans l'interface.
-  { name: "Fichiers - radio-content", path: "radio-content", schedule: "32 4 * * *", label: "discothèque des antennes (data/radio_content)" },
-];
+// Le périmètre lui-même est dans « tools/backup/jobs.json » : une ligne par
+// job, les mêmes quatre champs (name, path, label, schedule) et « enabled »
+// seulement quand il vaut false. Ce fichier est la déclaration, pas un
+// enregistrement : « --export » le régénère depuis l'instance en place, et le
+// DAG de synchro le commite. Les commentaires d'à côté restent valables
+// puisqu'ils décrivent ces lignes.
+const FILE_JOBS = JSON.parse(readFileSync(new URL("./jobs.json", import.meta.url), "utf8"));
+
+// Quatre notes attachées à des lignes précises de « jobs.json », gardées ici
+// parce qu'un JSON ne commente pas :
+//   - « traefik-acme » : le montage du volume est « docker/traefik-acme », mais
+//     le nom du job ne prend pas de barre oblique — ce serait un sous-dossier
+//     sur le dépôt, donc une seconde arborescence d'archives ;
+//   - les quatre jobs marqués « enabled: false » (mediakit-img,
+//     facturation-uploads, facturation-bc, mariadb-physical) naissent éteints :
+//     les trois applications voisines ne sont pas encore servies et la MariaDB
+//     n'a pas encore son mariabackup. Le job existe pour que la bascule ne soit
+//     qu'un bouton — le jour J, on l'active depuis « Jobs » après y avoir
+//     associé un profil de chiffrement (l'API ne sait pas créer la clé).
+//     L'amorçage, lui, ne rallume jamais un job existant : c'est pour cela que
+//     l'état de départ est déclaré ici plutôt qu'obtenu par une action manuelle,
+//     et depuis l'export c'est l'interface qui tient le drapeau ;
+//   - « facturation-uploads » et « facturation-bc » sont deux jobs et non un :
+//     « public/uploads » couvre les documents de projets et les images des
+//     incidents, « var/bc_files » porte les bons de commande téléversés. Deux
+//     archives, deux lignes de statut : un bon de commande manquant ne doit pas
+//     se lire comme une pièce jointe manquante. Le second suit le défaut de
+//     BC_PATH (%kernel.project_dir%/var/bc_files) ; un chemin absolu sur le
+//     serveur demanderait son propre montage ;
+//   - « radio-content » est activé d'emblée, contrairement aux quatre jobs en
+//     attente d'à côté : 9 Go mesurés sur le poste de développement, et c'est
+//     du contenu qui ne se régénère pas — ni dans git, ni dans les bases. GZIP
+//     sur des MP3 ne gagne presque rien, mais c'est le défaut de la maison et le
+//     job « media » le partage ; un réglage job par job se décide dans l'interface.
 
 // Les réglages que l'interface applique d'elle-même et que « POST /api/jobs »
 // ignore (mesuré : un job créé par l'API sans ces champs sort en FULL,
@@ -239,7 +259,18 @@ const EXCLUDES = [
 const RETENTION = "retention-gvs-default";
 
 let cookie = "";
-const log = (m) => process.stdout.write(`${m}\n`);
+// Les deux modes du programme : l'amorçage (écrit dans la console) et l'export
+// (lit la console, écrit un fichier). L'export ne doit rien laisser derrière
+// lui dans la console, pas même le compte administrateur s'il manque — ses
+// journaux partent donc sur stderr et son flux JSON reste seul sur stdout.
+const ARGS = process.argv.slice(2);
+const MODE_EXPORT = ARGS.includes("--export");
+const outIndex = ARGS.indexOf("--out");
+const OUT_FILE = outIndex >= 0 ? ARGS[outIndex + 1] : null;
+
+// Un seul flux pour les journaux : stderr en mode export, pour que le JSON
+// écrit sur stdout reste le seul contenu du tuyau.
+const log = (m) => (MODE_EXPORT ? process.stderr : process.stdout).write(`${m}\n`);
 const die = (m) => {
   process.stderr.write(`ERREUR: ${m}\n`);
   process.exit(1);
@@ -255,7 +286,17 @@ async function call(method, path, body, { auth = true, origin = false } = {}) {
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const setCookies = res.headers.getSetCookie?.() ?? [];
+  // « Headers.getSetCookie() » n'existe pas partout : mesuré le 2026-11-11, le
+  // Node 18.20.4 de l'image dagu ne l'a pas, alors que le Node du poste et celui
+  // du conteneur dbackup l'ont. Sans repli, la timbre reste VIDE, aucune requête
+  // suivante ne porte le cookie de session, et l'API répond 401 après une
+  // ouverture de session pourtant passée à 200 — le symptôme est exactement
+  // celui de la synchro lancée depuis Dagu. Le repli découpe l'en-tête unique
+  // « set-cookie » sur les virgules qui précèdent un « nom= », pour ne pas
+  // couper une date « Expires=Wed, 09 Jun… » en deux.
+  const setCookies = typeof res.headers.getSetCookie === "function"
+    ? res.headers.getSetCookie()
+    : (res.headers.get("set-cookie") ?? "").split(/,(?=\s*[A-Za-z0-9_.-]+=)/).map((c) => c.trim()).filter((c) => c.length);
   for (const c of setCookies) {
     const pair = c.split(";")[0].trim();
     cookie = cookie ? `${cookie}; ${pair}` : pair;
@@ -303,6 +344,10 @@ async function signIn() {
       die(`origine refusée : BETTER_AUTH_URL (${AUTH_ORIGIN}) n'est pas celle que la console reconnaît`);
     }
     break; // compte inconnu, ou mot de passe différent de celui du coffre
+  }
+
+  if (MODE_EXPORT) {
+    die("export interrompu : le compte du coffre n'ouvre pas la console. L'export ne crée aucun compte — lancer d'abord l'amorçage.");
   }
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -479,9 +524,159 @@ async function signalerEtatDesJobs() {
   }
 }
 
+// --- mode export -----------------------------------------------------------
+// « --export » régénère « jobs.json » depuis l'instance en place, sans rien
+// écrire dans la console. Une ligne par job, dans l'ordre du fichier quand le
+// job y figure déjà : un horaire déplacé à la souris doit produire un diff
+// d'une ligne, pas un réordonnancement des neuf.
+//
+// Trois champs reviennent de l'interface, ce sont les trois que « Jobs » sait
+// modifier sans reprendre le job entier : « schedule », « enabled » et le
+// périmètre (« path », la source du job). Le nom reste la clé — c'est lui qui
+// attache le dossier d'archives et sa rétention (voir l'en-tête du fichier).
+// « label » n'existe pas dans la console : il est relu dans la description
+// quand elle a la forme posée par l'amorçage, sinon l'étiquette déjà versionnée
+// est gardée.
+const FORME_DESCRIPTION = /^Sauvegarde du dossier \S+ — (.+)\.$/;
+const NOM_JOB_FICHIERS = /^Fichiers - /;
+
+const etiquette = (job, defaut) => {
+  const m = FORME_DESCRIPTION.exec((job.description ?? "").trim());
+  return m ? m[1] : defaut;
+};
+
+// Une source, un chemin relatif : c'est la seule forme que le fichier sait
+// décrire. Tout le reste (job sans source, sources multiples, adaptateur de
+// volume) se signale au lieu de se réduire de force à une ligne.
+function cheminSource(job) {
+  const sources = (job.sources ?? []).filter((s) => s && typeof s.path === "string" && s.path.length);
+  if (sources.length !== 1) return null;
+  return sources[0].path.replace(/^\/+/, "");
+}
+
+function ligne(job) {
+  const champs = { name: job.name, path: job.path, label: job.label, schedule: job.schedule };
+  if (job.enabled === false) champs.enabled = false;
+  return `  ${JSON.stringify(champs)}`;
+}
+
+function comparaison(avant, apres) {
+  const ecarts = [];
+  for (const cle of ["schedule", "path"]) {
+    if (avant[cle] !== apres[cle]) ecarts.push(`${cle}: « ${avant[cle]} » → « ${apres[cle]} »`);
+  }
+  const actifAvant = avant.enabled !== false;
+  const actifApres = apres.enabled !== false;
+  if (actifAvant !== actifApres) ecarts.push(actifApres ? "activé dans l'interface" : "désactivé dans l'interface");
+  return ecarts;
+}
+
+// Les montages réels sous « /backup », lus dans compose.yaml (le dépôt les
+// versionne, l'instance en place ne les connaît pas). Un job dont le chemin
+// n'est couvert par aucun montage archive « rien » : la console le signale
+// chaque nuit, et l'export doit le dire aussi plutôt que de le faire passer
+// pour une donnée versionnée. C'est ainsi que « Fichiers - logs » se voit
+// encore déclaré dans la console alors que « /backup/logs » est sorti du
+// périmètre le 2026-11-09 avec le montage de « var/log ».
+function montagesBackup() {
+  const chemins = [];
+  try {
+    const texte = readFileSync(new URL("../../compose.yaml", import.meta.url), "utf8");
+    for (const m of texte.matchAll(/^\s*-\s+\S+:(\/backup\/[^\s:]+)/gm)) chemins.push(m[1]);
+  } catch {
+    return null; // hors dépôt (conteneur « /opt/backup-tools ») : rien à croiser
+  }
+  return chemins;
+}
+
+const couvreMontage = (montages, chemin) =>
+  !montages || montages.some((m) => {
+    const relatif = m.slice("/backup/".length);
+    return chemin === relatif || chemin.startsWith(`${relatif}/`);
+  });
+
+async function exporterJobs() {
+  const fichier = JSON.parse(readFileSync(new URL("./jobs.json", import.meta.url), "utf8"));
+  const live = await listJobs();
+  const montages = montagesBackup();
+  const parNom = new Map(live.map((j) => [j.name, j]));
+
+  const resultat = [];
+  const signales = [];
+  let changes = 0;
+
+  for (const declare of fichier) {
+    const job = parNom.get(declare.name);
+    if (!job) {
+      // L'amorçage le recréera à la prochaine passe : l'export ne supprime
+      // jamais une déclaration parce que l'instance ne la montre plus.
+      resultat.push(declare);
+      signales.push(`« ${declare.name} » absent de la console — déclaration gardée telle quelle`);
+      continue;
+    }
+    const perimetre = cheminSource(job);
+    const apres = {
+      ...declare,
+      schedule: job.schedule ?? job.cronExpression ?? declare.schedule,
+      enabled: job.enabled,
+      label: etiquette(job, declare.label),
+    };
+    if (perimetre) apres.path = perimetre;
+    else signales.push(`« ${declare.name} » : ${job.sources?.length ?? 0} source(s) — périmètre non relisible, chemin versionné gardé`);
+    const ecarts = comparaison(declare, apres);
+    if (ecarts.length) {
+      changes++;
+      signales.push(`« ${declare.name} » : ${ecarts.join(", ")}`);
+    }
+    resultat.push(apres);
+  }
+
+  const connus = new Set(fichier.map((j) => j.name));
+  for (const job of live) {
+    if (connus.has(job.name) || !NOM_JOB_FICHIERS.test(job.name)) continue;
+    const perimetre = cheminSource(job);
+    if (!perimetre) {
+      signales.push(`« ${job.name} » créé dans l'interface sans source unique — non exporté`);
+      continue;
+    }
+    resultat.push({ name: job.name, path: perimetre, label: etiquette(job, "créé depuis l'interface"), schedule: job.schedule ?? job.cronExpression, enabled: job.enabled });
+    changes++;
+    signales.push(`« ${job.name} » : nouveau job déclaré depuis l'interface (${perimetre})`);
+  }
+
+  // Un chemin sans montage se signale, il ne disparaît pas du fichier : c'est
+  // une décision de périmètre, donc une ligne à lire dans « git diff », pas un
+  // nettoyage à décider ici.
+  for (const j of resultat) {
+    if (!couvreMontage(montages, j.path)) {
+      signales.push(`« ${j.name} » : rien n'est monté sous « /backup/${j.path} » dans compose.yaml — le job n'a rien à archiver`);
+    }
+  }
+
+  const texte = `[\n${resultat.map(ligne).join(",\n")}\n]\n`;
+  if (OUT_FILE && OUT_FILE !== "-") {
+    writeFileSync(OUT_FILE, texte);
+  } else {
+    process.stdout.write(texte);
+  }
+
+  const horsPerimetre = live.filter((j) => !NOM_JOB_FICHIERS.test(j.name)).map((j) => j.name);
+  log(`jobs exportés : ${resultat.length} (${changes} écart(s) avec la déclaration versionnée)`);
+  for (const s of signales) log(`  · ${s}`);
+  if (horsPerimetre.length) log(`  · hors jobs de fichiers, non versionnés ici : ${horsPerimetre.join(", ")}`);
+  if (OUT_FILE && OUT_FILE !== "-") log(`  · écrit dans ${OUT_FILE}`);
+}
+
 async function main() {
   requireEnv("DBACKUP_ADMIN_EMAIL", "DBACKUP_ADMIN_PASSWORD");
   await waitForApi();
+
+  if (MODE_EXPORT) {
+    await signIn();
+    await assertApiWorks();
+    await exporterJobs();
+    return;
+  }
 
   log("Amorçage de la console de sauvegarde…");
   const etat = await signIn();

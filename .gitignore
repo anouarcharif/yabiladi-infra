@@ -51,6 +51,20 @@
 /docker/legacy/geoip.env
 ###< identifiants MaxMind ###
 
+###> dépôt local des crédentials de la synchro d'IHM vers git ###
+# Le bloc scellé « ui-sync » se matérialise dans le dépôt du SITE, pas ici :
+# c'est le conteneur dagu — service du projet du site — qui relit les trois
+# consoles et pousse les commits, donc c'est son « env_file » qui a besoin des
+# valeurs (gabarit : docker/legacy/ui-sync.env.example du site, ligne « ui-sync »
+# du deploy/secrets.manifest avec projet « site »).
+# Le fichier de CE dépôt n'est qu'un dépôt local pour les runs à la main —
+# « node tools/sync/export-grafana.mjs », « tools/backup/dbackup-bootstrap.mjs
+# --export » — et c'est « tools/sync/bootstrap-grafana-sync-token.mjs » qui le
+# pose, en 0600, sans jamais afficher la clé. Rien n'est scellé ici : un jeton
+# scellé deux fois se dérobe à la re-scellation du jour où il change.
+/docker/legacy/ui-sync.env
+###< dépôt local des crédentials de la synchro d'IHM ###
+
 ###> comptes basicauth Traefik (chiffrés dans le coffre) ###
 # Hashs bcrypt lus par les middlewares basicauth (dagu, grafana, dbackup,
 # tableau de bord, rac). Le clair ne voyage pas dans git : il est scellé dans

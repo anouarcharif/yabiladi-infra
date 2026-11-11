@@ -59,6 +59,12 @@ DBackup, Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor.
   ./deploy.sh --verify         poste de dev : round-trip octet pour octet, sans rien écrire
 
 TARGET_PROJECT=<nom> fixe le projet dont on relit les secrets (par défaut « infra »).
+TARGET_PROJECT_DIR=<chemin d'hôte> désigne le dépôt de ce projet, pour « --encrypt »
+et « --verify » d'un projet qui n'est pas celui-ci : le dépôt se monte en /app et le
+coffre y écrit (et y relit) les clairs. Exemple, sceller une entrée du site depuis ce
+dépôt :
+  TARGET_PROJECT=site TARGET_PROJECT_DIR=../Yabiladi-V2-Symfony \
+    SECRETS_ONLY=ui-sync ./deploy.sh --encrypt
 SECRETS_ONLY=<fragment[,fragment]> restreint encore la liste aux entrées dont le
 chemin contient l'un des fragments — c'est l'ancienne façon de faire, gardée pour
 la rotation ciblée d'une seule entrée (« SECRETS_ONLY=htpasswd » par exemple).
@@ -135,9 +141,10 @@ export_machine_env() {
 
 # Le conteneur qui déchiffre monte CE dépôt en /w : c'est là que vivent le
 # manifeste, les blocs chiffrés et deploy/secrets.sh. Le dépôt de l'application
-# concernée, quand ce n'est pas celui-ci, est monté en plus par l'appelant sous
-# /app (TARGET_PROJECT_DIR) : la même table du coffre sert aux quatre projets,
-# chaque deploy.sh n'en déploie que les lignes qui sont les siennes.
+# concernée, quand ce n'est pas celui-ci, est monté en plus sous /app : la même
+# table du coffre sert aux quatre projets, chaque deploy.sh n'en déploie que les
+# lignes qui sont les siennes. L'appelant désigne ce dépôt par TARGET_PROJECT_DIR,
+# en chemin d'hôte ; le conteneur ne le voit jamais que sous /app.
 run_secrets_tool() { # $@ = verbe du conteneur
     [ -f "$AGE_KEY_FILE" ] || die "clé age introuvable: $AGE_KEY_FILE
 Ce serveur (ou ce poste) ne peut pas lire le coffre. Une seule façon de le lui
@@ -147,13 +154,29 @@ l'espace de stockage chiffré où vous l'avez gardée."
                     -v "$(host_path "$REPO")":/w)
     # Le dépôt d'un autre projet n'est monté que si ce script en déploie un :
     # « --encrypt »/« --verify » sur « infra » n'ont rien à écrire ailleurs.
-    [ -n "${TARGET_PROJECT_DIR:-}" ] && montages+=(-v "$(host_path "$TARGET_PROJECT_DIR"):/app")
+    #
+    # TARGET_PROJECT_DIR a DEUX sens selon celui qui la pose, et c'est ici qu'ils
+    # se séparent : pour l'appelant, un CHEMIN D'HÔTE (c'est le « -v » qui en a
+    # besoin) ; pour deploy/secrets.sh, le CHEMIN DANS LE CONTENEUR, toujours /app
+    # puisque c'est là que le montage atterrit. Confondre les deux rendait
+    # l'encryption croisée impossible : mesuré le 2026-11-11, « TARGET_PROJECT=site
+    # TARGET_PROJECT_DIR=/c/Yabiladi_Upgrade/Yabiladi-V2-Symfony ./deploy.sh
+    # --encrypt » montait bien le dépôt en /app mais faisait chercher au coffre le
+    # même chemin dans le conteneur, d'où « le dépôt du projet « site » n'est pas
+    # monté (… introuvable dans le conteneur) ». Le site, lui, pose déjà /app : son
+    # « -v » et son « -e » sont deux lignes séparées (deploy.sh du site, fonction
+    # materialize_secrets) — le contrat est donc respecté ici plutôt que subi.
+    local cible_conteneur=/w
+    if [ -n "${TARGET_PROJECT_DIR:-}" ]; then
+        montages+=(-v "$(host_path "$TARGET_PROJECT_DIR"):/app")
+        cible_conteneur=/app
+    fi
     docker run --rm --network none \
         "${montages[@]}" \
         -w /w \
         -e SOPS_AGE_KEY_FILE=/keys/keys.txt \
         -e TARGET_PROJECT="$TARGET_PROJECT" \
-        -e TARGET_PROJECT_DIR="${TARGET_PROJECT_DIR:-/w}" \
+        -e TARGET_PROJECT_DIR="$cible_conteneur" \
         -e SECRETS_ONLY="${SECRETS_ONLY:-}" \
         --entrypoint bash "$SECRETS_IMAGE" /w/deploy/secrets.sh "$@"
 }

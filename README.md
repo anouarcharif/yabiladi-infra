@@ -31,3 +31,30 @@ en **DNS only** chez Cloudflare (nuage gris). Leurs barrières —
 `docker/traefik/dynamic.yml` — comparent l'adresse du pair TCP : proxifiées, elles
 jugeraient une sortie de datacenter partagée avec des millions de visiteurs.
 
+## Les retouches d'interface rentrent dans git toutes seules
+
+`allowUiUpdates: true` dans
+`docker/grafana/provisioning/dashboards/logging.yaml` rend l'enregistrement
+possible depuis l'IHM Grafana — et écrit dans la **base** Grafana, pas dans les
+JSON versionnés. Le retour vers git se fait par un export API lu avec le compte de
+service Viewer `synchro-ihm` (`tools/sync/export-grafana.mjs`, qui régénère les
+dashboards du provisioning), et le même mouvement pour la console de sauvegarde
+(`tools/backup/dbackup-bootstrap.mjs --export` régénère `tools/backup/jobs.json`
+depuis les dix jobs en place, en croisant chaque chemin avec les montages
+`/backup` de `compose.yaml` pour signaler un job qui n'a plus rien à archiver).
+
+Le conducteur, lui, est de l'autre côté : `docker/dagu/ui-git-sync.sh` dans le
+dépôt du site, appelé par le DAG `synchro_ihm_git` toutes les quinze minutes. Il
+clone les deux dépôts dans son propre volume et **lit les exporteurs ci-dessus
+dans le clone de l'infra** — c'est pour ça que les scripts restent ici et que le
+conducteur n'y est pas : un DAG qui appelle un script de ce dépôt le trouve en
+`tools/`, à côté des autres outils, et non en `docker/`.
+
+Le coffre centralise la table mais pas les fichiers : la ligne
+`deploy/secrets/ui-sync.sops.bin` de `deploy/secrets.manifest` est marquée
+`site`, et c'est le `deploy.sh` du site qui la matérialise en
+`docker/legacy/ui-sync.env` (0600, `env_file` du seul conteneur `dagu`). Les
+cinq variables — dont le couple de promotion administrateur de DBackup, lu par
+l'export à chaque passe — ne passent par un journal, une ligne de commande ni un
+message : le scellement se relit par `./deploy.sh --verify` dans le dépôt du site.
+

@@ -12,8 +12,6 @@
   "graphTooltip": 1,
   "refresh": "",
   "schemaVersion": 42,
-  "version": 0,
-  "id": null,
   "time": {
     "from": "now-3h",
     "to": "now"
@@ -134,8 +132,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
-          "limit": null
+          "fields": ""
         },
         "textMode": "auto"
       },
@@ -151,8 +148,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
+                "color": "red"
               },
               {
                 "color": "green",
@@ -169,7 +165,8 @@
         "y": 0,
         "h": 6,
         "w": 8
-      }
+      },
+      "id": 1
     },
     {
       "type": "stat",
@@ -203,8 +200,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
-          "limit": null
+          "fields": ""
         },
         "textMode": "auto"
       },
@@ -220,8 +216,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
-                "value": null
+                "color": "blue"
               }
             ]
           },
@@ -234,7 +229,8 @@
         "y": 0,
         "h": 6,
         "w": 8
-      }
+      },
+      "id": 2
     },
     {
       "type": "stat",
@@ -268,8 +264,7 @@
           "calcs": [
             "lastNotNull"
           ],
-          "fields": "",
-          "limit": null
+          "fields": ""
         },
         "textMode": "auto"
       },
@@ -285,8 +280,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "color": "green"
               },
               {
                 "color": "red",
@@ -303,7 +297,8 @@
         "y": 0,
         "h": 6,
         "w": 8
-      }
+      },
+      "id": 3
     },
     {
       "type": "timeseries",
@@ -396,8 +391,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "color": "green"
               }
             ]
           },
@@ -410,7 +404,8 @@
         "y": 6,
         "h": 8,
         "w": 12
-      }
+      },
+      "id": 4
     },
     {
       "type": "timeseries",
@@ -503,8 +498,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "color": "green"
               }
             ]
           },
@@ -517,7 +511,8 @@
         "y": 6,
         "h": 8,
         "w": 12
-      }
+      },
+      "id": 5
     },
     {
       "type": "timeseries",
@@ -600,8 +595,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
-                "value": null
+                "color": "transparent"
               }
             ]
           },
@@ -614,7 +608,8 @@
         "y": 14,
         "h": 8,
         "w": 6
-      }
+      },
+      "id": 6
     },
     {
       "type": "timeseries",
@@ -697,8 +692,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
-                "value": null
+                "color": "transparent"
               }
             ]
           },
@@ -711,7 +705,8 @@
         "y": 14,
         "h": 8,
         "w": 6
-      }
+      },
+      "id": 7
     },
     {
       "type": "timeseries",
@@ -794,8 +789,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
-                "value": null
+                "color": "transparent"
               }
             ]
           },
@@ -808,7 +802,8 @@
         "y": 14,
         "h": 8,
         "w": 6
-      }
+      },
+      "id": 8
     },
     {
       "type": "timeseries",
@@ -891,8 +886,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
-                "value": null
+                "color": "transparent"
               }
             ]
           },
@@ -905,7 +899,8 @@
         "y": 14,
         "h": 8,
         "w": 6
-      }
+      },
+      "id": 9
     },
     {
       "type": "timeseries",
@@ -988,8 +983,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
-                "value": null
+                "color": "transparent"
               }
             ]
           },
@@ -1002,7 +996,8 @@
         "y": 22,
         "h": 8,
         "w": 8
-      }
+      },
+      "id": 10
     },
     {
       "type": "timeseries",
@@ -1085,8 +1080,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
-                "value": null
+                "color": "transparent"
               }
             ]
           },
@@ -1099,7 +1093,8 @@
         "y": 22,
         "h": 8,
         "w": 8
-      }
+      },
+      "id": 11
     },
     {
       "type": "timeseries",
@@ -1182,8 +1177,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "transparent",
-                "value": null
+                "color": "transparent"
               }
             ]
           },
@@ -1196,7 +1190,8 @@
         "y": 22,
         "h": 8,
         "w": 8
-      }
+      },
+      "id": 12
     },
     {
       "type": "logs",
@@ -1236,7 +1231,8 @@
         "y": 30,
         "h": 8,
         "w": 12
-      }
+      },
+      "id": 13
     },
     {
       "type": "logs",
@@ -1276,7 +1272,8 @@
         "y": 30,
         "h": 8,
         "w": 12
-      }
+      },
+      "id": 14
     },
     {
       "type": "text",
@@ -1291,7 +1288,10 @@
       "options": {
         "mode": "markdown",
         "content": "## Que faire quand un mail d'alerte arrive\n\nLes deux liens en haut de page ouvrent la liste des règles (avec leurs états et leur historique) et le dashboard d'audience.\n\nLes règles vivent dans `docker/grafana/provisioning/alerting/alert_rules_radio.yaml` (dossier Radio, groupe `sante-des-antennes`, évaluation chaque minute). Le destinataire est `anouar@yabiladi.com`, réglé dans `contact_points.yaml` ; les tempos — 30 s d'attente pour le critique, 1 min pour l'avertissement, répétition toutes les 1 h / 12 h — sont dans `notification_policies.yaml`.\n\n1. **Le conteneur tourne-t-il ?** `docker compose ps radio-<station>` — la colonne `Health` vient du `7.html` du DNAS : `healthy` veut dire que le port répond et que `streamStatus` vaut 1. C'est le seul contrôle instantané de la chaîne ; les panneaux ci-dessus, eux, parlent à quinze minutes.\n2. **Que disait l'antenne avant de se taire ?** `docker compose logs --since 30m radio-<station>` ; ou ici même, le panneau « Journal des pannes » en filtrant sur l'antenne.\n3. **Le flux est-il vivant mais sans musique ?** « Antennes vivantes » à 4 et « Incidents visibles » à 0 avec un `streamStatus` à 1 = rien à jouer : la playlist ou la discothèque, pas le réseau.\n4. **Redémarrer proprement.** Lancer le DAG `radio-<station>` dans Dagu (il repositionne la playlist de la case en cours et recharge sc_trans). Le `POST /reload` du point de contrôle interne (port 9600) ne se déclenche pas à la main en production : il contourne la grille.\n\nUn doute sur un motif de log, une ligne qui manque ici : `ScreenLog=1` rend la sortie d'écran du DNAS dans Loki, donc `docker compose logs` et ces panneaux voient exactement la même chose."
-      }
+      },
+      "id": 15
     }
-  ]
+  ],
+  "fiscalYearStartMonth": 0,
+  "weekStart": ""
 }
