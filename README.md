@@ -54,7 +54,22 @@ Le coffre centralise la table mais pas les fichiers : la ligne
 `deploy/secrets/ui-sync.sops.bin` de `deploy/secrets.manifest` est marquée
 `site`, et c'est le `deploy.sh` du site qui la matérialise en
 `docker/legacy/ui-sync.env` (0600, `env_file` du seul conteneur `dagu`). Les
-cinq variables — dont le couple de promotion administrateur de DBackup, lu par
+six variables — dont le couple de promotion administrateur de DBackup, lu par
 l'export à chaque passe — ne passent par un journal, une ligne de commande ni un
 message : le scellement se relit par `./deploy.sh --verify` dans le dépôt du site.
+
+La sixième, `GRAFANA_ADMIN_PASSWORD`, est la recopie du fichier brut scellé sous
+`deploy/secrets/grafana-admin.sops.bin` (ligne `infra` du manifeste) :
+`docker/grafana/secrets/admin_password`, que `prepare_logging` posait jusqu'ici
+au hasard sur chaque machine. Il voyage désormais depuis le coffre, pour une seule
+raison mesurée : une clé de compte de service appartient à la base Grafana qui
+l'a émise, et rien en 13.3.0 OSS n'en fixe une d'avance (`provisioning/access`
+n'est pas lu, `[security] admin_api_key` a disparu de `conf/defaults.ini`). Sur
+une instance neuve, `export-grafana.mjs` sort donc 3 (« PAS DE CREDIT ») et le
+conducteur appelle `tools/sync/bootstrap-grafana-sync-token.mjs --out …`, qui
+crée le compte Viewer et écrit la clé dans le volume `dagu_data` — jamais
+re-scellée, jamais affichée. L'administrateur ne sert qu'à cette fabrication :
+`export-grafana.mjs` ne l'accepte plus même en repli, et une rotation du mot de
+passe faite dans l'interface demande de re-sceller `grafana-admin` puis `ui-sync`,
+dans cet ordre.
 

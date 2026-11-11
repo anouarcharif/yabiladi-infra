@@ -673,11 +673,23 @@ done
 
 # Deux filtres, dans cet ordre : la colonne « project » du manifeste retient les
 # entrées de l'infrastructure, puis SECRETS_ONLY — s'il est posé — n'en garde que
-# les fragments cités. Sans SECRETS_ONLY, toutes les lignes « infra » se
+# les fragments cités. Sans SECRETS_ONLY, TOUTES les lignes « infra » se
 # déploient : env.local (le fichier machine de CE dépôt), dbackup (les quatre
-# clés de la console) et les deux fichiers htpasswd lus par les middlewares.
+# clés de la console), geoip (la clé MaxMind du téléchargement GeoLite2), les deux
+# fichiers htpasswd lus par les middlewares, et grafana-admin (le mot de passe
+# qu'une machine neuve doit connaître pour que la synchro des IHM puisse se
+# fabriquer sa clé Viewer).
+#
+# La liste est écrite alors que « vide = tout » rendrait le même service : une
+# machine qui n'a pas encore reçu un des clairs (geoip.env sur un poste qui ne
+# télécharge pas la base, par exemple) doit pouvoir faire « ./deploy.sh
+# --encrypt » sans que le coffre meure sur l'absent. CONTREPARTIE À TENIR :
+# chaque nouvelle ligne « infra » du manifeste doit rejoindre cette liste, sinon
+# elle ne se matérialise plus au déploiement — et le « --verify » de CE dépôt ne
+# le voit pas, puisqu'il filtre pareil. C'est exactement comment « ui-sync »
+# s'est retrouvé hors de la portée du site (voir le deploy.sh de CE projet).
 if [ -z "${SECRETS_ONLY:-}" ]; then
-    SECRETS_ONLY='env.local,dbackup,htpasswd'
+    SECRETS_ONLY='env.local,dbackup,geoip,htpasswd,grafana-admin'
 fi
 export SECRETS_ONLY TARGET_PROJECT
 

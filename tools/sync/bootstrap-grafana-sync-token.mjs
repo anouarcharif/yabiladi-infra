@@ -1,27 +1,42 @@
 #!/usr/bin/env node
 /**
  * Crée le compte de service Grafana dont la synchro d'IHM a besoin pour relire
- * les dashboards, et pose sa clé dans le fichier que le coffre scelle.
+ * les dashboards, et pose sa clé dans un fichier lu par elle.
  *
  *   node tools/sync/bootstrap-grafana-sync-token.mjs                       # depuis le dépôt
  *   GRAFANA=http://127.0.0.1:8088 node tools/sync/bootstrap-grafana-sync-token.mjs   # depuis l'hôte
+ *   node tools/sync/bootstrap-grafana-sync-token.mjs --out <fichier>        # autre destination
  *
  * Pourquoi un compte de service et pas le compte administrateur : la synchro lit
  * des dashboards, elle n'écrit rien dans Grafana (mesuré le 2026-11-11 :
  * l'enregistrement d'une retouche passe par « PUT /apis/dashboard.grafana.app/v1/
  * … » et n'écrase aucun fichier). Le rôle « Viewer » suffit, et un jeton Viewer
- * volé ne donne pas la main sur Grafana. Le compte administrateur de la machine,
- * lui, reste hors coffre (voir deploy/secrets.manifest : il n'a d'effet qu'au
- * tout premier démarrage).
+ * volé ne donne pas la main sur Grafana.
+ *
+ * Ce script est le SEUL endroit de la synchro qui utilise le compte
+ * administrateur — et le seul endroit où ce mot de passe voyage : il est scellé
+ * sous deploy/secrets/grafana-admin.sops.bin et recopié, en sixième variable du
+ * bloc « ui-sync », pour la raison mesurée suivante : une clé de compte de
+ * service appartient à la base qui l'a émise. Celle du coffre ouvre CE poste et
+ * rend 401 sur un serveur neuf, et rien de déclaratif n'en donne une à une
+ * instance vierge (13.3.0 OSS ne lit pas « provisioning/access », et
+ * « [security] admin_api_key » a disparu de « conf/defaults.ini »). Le conducteur
+ * « docker/dagu/ui-git-sync.sh » appelle donc ce script avec « --out » sur son
+ * propre volume à chaque « PAS DE CREDIT » : la clé fabriquée reste sur la
+ * machine, elle n'est pas re-scellée — elle ne vaut que pour son instance.
  *
  * Les règles de secrets de ce dépôt s'appliquent :
  *  - la valeur n'est JAMAIS imprimée, ni ici ni dans un log ;
  *  - elle ne passe par aucun argument de ligne de commande (elle resterait dans
  *    « ps ») : le script la lit de l'API et l'écrit directement dans le fichier,
  *    en 0600, umask 077 ;
- *  - le fichier de sortie est hors git (docker/legacy/*.env) et sa ligne est
- *    déclarée dans deploy/secrets.manifest ; le gabarit versionné des noms est
- *    docker/legacy/ui-sync.env.example.
+ *  - par défaut le fichier de sortie est docker/legacy/ui-sync.env du dépôt du
+ *    site, hors git, déclaré dans deploy/secrets.manifest ; son contenu existant
+ *    est CONSERVÉ — la ligne « GRAFANA_SYNC_TOKEN= » est remplacée en place, ou
+ *    ajoutée, jamais écrasée au profit d'une écriture nue qui perdrait les cinq
+ *    autres variables scellées (mesuré le 2026-11-11 sur ce poste : la première
+ *    version du script faisait exactement cela) ;
+ *  - le gabarit versionné des noms est docker/legacy/ui-sync.env.example.
  *
  * Idempotent : relancé, il vérifie que la clé déjà en place ouvre bien l'API en
  * lecture ; si oui il ne touche à rien, si non il crée une nouvelle clé (l'ancien
@@ -43,12 +58,17 @@ const RACINE = (() => {
 const NOM_COMPTE = process.env.GRAFANA_SYNC_SA_NAME || "synchro-ihm";
 const NOM_CLE = "synchro";
 let SORTIE = process.env.GRAFANA_SYNC_ENV_FILE || join(RACINE, "docker", "legacy", "ui-sync.env");
+// « --out » = destination hors coffre (le volume du conteneur dagu, sur une
+// machine neuve). Elle change le mot de la fin : une clé fabriquée pour UNE
+// instance ne se scelle pas, elle ferait disparaître celle de la machine qui a
+// servi de source au scellement.
+let HORS_COFFRE = false;
 {
   const idx = process.argv.indexOf("--out");
-  if (idx >= 0) SORTIE = resolve(process.argv[idx + 1]);
+  if (idx >= 0) { SORTIE = resolve(process.argv[idx + 1]); HORS_COFFRE = true; }
 }
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
-  process.stdout.write("Usage : node tools/sync/bootstrap-grafana-sync-token.mjs [--repo <dépôt>] [--out <fichier>]\nCrée le compte de service « " + NOM_COMPTE + " » et pose sa clé dans docker/legacy/ui-sync.env, sans jamais l'afficher.\n");
+  process.stdout.write("Usage : node tools/sync/bootstrap-grafana-sync-token.mjs [--repo <dépôt>] [--out <fichier>]\nCrée le compte de service « " + NOM_COMPTE + " » et pose sa clé sans jamais l'afficher : dans\ndocker/legacy/ui-sync.env (le clair que scelle le coffre) par défaut, dans « --out » sinon —\nc'est le cas du conteneur dagu sur une machine neuve, où la clé reste sur le volume.\n");
   process.exit(0);
 }
 
@@ -56,8 +76,12 @@ const BASE = (process.env.GRAFANA_URL || process.env.GRAFANA || "http://grafana:
 const LECTURE_ADMIN = () => {
   const usager = process.env.GRAFANA_ADMIN_USER || "yabiladi";
   // Même handling que tools/sync/export-grafana.mjs : les sauts de ligne finaux
-  // seulement. Le fichier de la machine se termine par un « \r » que la base
-  // Grafana a enregistré ; le retirer produit un 401 sans rapport apparent.
+  // seulement, jamais les retours chariot. Mesuré le 2026-11-11 sur ce poste : le
+  // fichier portait un « \r » que la base Grafana a enregistré tel quel, et un
+  // « trim() » donnait un 401 sans rapport apparent — plus vingt-cinq tentatives
+  // du limiteur d'authentification consommées. Le fichier est maintenant propre
+  // (43 octets, sans CR ni LF) et c'est cet état qui est scellé ; la règle de
+  // tonte, elle, ne change pas, sinon la valeur re-scellée divergerait de la base.
   const motDePasse = (process.env.GRAFANA_ADMIN_PASSWORD || "").replace(/\n+$/, "")
     || (() => {
       const fichier = process.env.GRAFANA_ADMIN_PASSWORD_FILE || join(RACINE, "docker", "grafana", "secrets", "admin_password");
@@ -65,7 +89,7 @@ const LECTURE_ADMIN = () => {
       return readFileSync(fichier, "utf8").replace(/\n+$/, "");
     })();
   if (!usager || !motDePasse) {
-    process.stderr.write("ERREUR: pas de compte administrateur — GRAFANA_ADMIN_USER + GRAFANA_ADMIN_PASSWORD(_FILE), ou docker/grafana/secrets/admin_password sur la machine (reposé par tools/logging/bootstrap-grafana-admin.sh)\n");
+    process.stderr.write("ERREUR: pas de compte administrateur — GRAFANA_ADMIN_USER + GRAFANA_ADMIN_PASSWORD(_FILE) dans l'environnement (le bloc « ui-sync » du coffre porte cette sixième variable, et c'est de là que la lit le conteneur dagu), ou le fichier docker/grafana/secrets/admin_password de la machine (celui que scelle deploy/secrets/grafana-admin.sops.bin)\n");
     process.exit(1);
   }
   return "Basic " + Buffer.from(`${usager}:${motDePasse}`).toString("base64");
@@ -158,12 +182,12 @@ async function main() {
 
   mkdirSync(dirname(SORTIE), { recursive: true });
   // Fusion, pas réécriture : « SORTIE » est le fichier que le coffre scelle, et
-  // il porte quatre autres lignes (GIT_PUSH_TOKEN, GIT_PUSH_USER, le couple
-  // DBackup). Écrire le fichier depuis zéro les effaçait, et le scellement
-  // suivant partait d'un clair amputé. Le remplacement vise la seule ligne
-  // « GRAFANA_SYNC_TOKEN= » et laisse les autres octets en place ; la valeur
-  // s'insère par une fonction, sinon un « $ » d'un jeton serait lu comme une
-  // référence d'expression régulière.
+  // il porte cinq autres lignes (GIT_PUSH_TOKEN, GIT_PUSH_USER, le couple
+  // DBackup, GRAFANA_ADMIN_PASSWORD). Écrire le fichier depuis zéro les effaçait,
+  // et le scellement suivant partait d'un clair amputé. Le remplacement vise la
+  // seule ligne « GRAFANA_SYNC_TOKEN= » et laisse les autres octets en place ; la
+  // valeur s'insère par une fonction, sinon un « $ » d'un jeton serait lu comme
+  // une référence d'expression régulière.
   const existant = existsSync(SORTIE) ? readFileSync(SORTIE, "utf8") : "";
   const ligne = `GRAFANA_SYNC_TOKEN=${cle}`;
   const prochain = /^GRAFANA_SYNC_TOKEN=.*$/m.test(existant)
@@ -176,7 +200,11 @@ async function main() {
     process.umask(umask);
   }
   try { chmodSync(SORTIE, 0o600); } catch { /* Windows : le mode vient de l'ACL, pas de umask */ }
-  process.stdout.write(`clé écrite dans ${SORTIE} (0600, jamais affichée) — à sceller : SECRETS_ONLY=ui-sync ./deploy.sh --encrypt\n`);
+  process.stdout.write(
+    HORS_COFFRE
+      ? `clé écrite dans ${SORTIE} (0600, jamais affichée) — elle reste sur cette machine : émise par ${BASE}, elle n'ouvre aucune autre instance et ne se scelle pas\n`
+      : `clé écrite dans ${SORTIE} (0600, jamais affichée) — à sceller depuis le dépôt d'infra : TARGET_PROJECT=site TARGET_PROJECT_DIR=<dépôt du site> SECRETS_ONLY=ui-sync ./deploy.sh --encrypt\n`
+  );
 }
 
 main().catch((e) => {

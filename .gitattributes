@@ -1,0 +1,21 @@
+# Les blocs du coffre ne sont pas du texte.
+#
+# Mesuré sur CE dépôt avec « core.autocrlf=true » (le réglage du poste sous
+# Windows) : sans règle ici, un fichier dont git devine du texte subit la
+# conversion à l'ALLER comme au RETOUR — un « git checkout -- deploy/secrets/ »
+# pose donc des CRLF dans l'armure « -----BEGIN AGE ENCRYPTED FILE----- », et le
+# fichier de la machine n'est plus l'octet près ce que le coffre a chiffré. Le
+# « --verify » du dépôt le reproche alors sur TOUS les blocs à la fois (message
+# « DIFFÉRENT », jamais la valeur), et « materialize » écrirait des clairs issus
+# d'un déchiffrage dont la tolérance n'est testée nulle part.
+#
+# « -text » coupe la conversion dans les deux sens ; « -diff » et « -merge »
+# évitent qu'un blob de 9 400 octets de base64 paraisse diffable ou fusionnable :
+# un bloc chiffré se remplace, il ne se relit pas ligne à ligne.
+#
+# Le motif vise « deploy/secrets/ » et rien d'autre : c'est là que vivent les
+# secrets, et le reste du dépôt (YAML, shell, mjs) garde les conventions
+# d'avant — aucun « eol=lf » global n'est posé ici, il renormaliserait des
+# milliers de lignes sans rapport avec ce chantier.
+deploy/secrets/*.sops.bin -text -diff -merge
+deploy/secrets/*.sops.env -text -diff -merge

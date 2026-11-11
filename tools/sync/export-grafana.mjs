@@ -6,6 +6,16 @@
  *   node tools/sync/export-grafana.mjs --check          # ne écrit rien, signale
  *   node tools/sync/export-grafana.mjs --root <dir>      # cible un autre dépôt
  *
+ * Codes de sortie : 0 rien à dire, 1 échec d'API, 2 écart constaté (« --check »),
+ * 3 le crédit Viewer reçu n'ouvre pas CETTE instance — cas d'une machine neuve
+ * avec la clé scellée d'un autre poste, c'est ce code que regarde le conducteur
+ * de synchro pour aller fabriquer une clé locale.
+ *
+ * Identification : la seule acceptée est la clé du compte de service Viewer
+ * « synchro-ihm », par « GRAFANA_SYNC_TOKEN » ou « GRAFANA_SYNC_TOKEN_FILE ».
+ * Voir « authentification() » plus bas pour pourquoi le compte administrateur
+ * n'y a plus sa place.
+ *
  * Pourquoi un export et pas une écriture directe de Grafana : mesuré sur
  * 13.3.0 (2026-11-11, dossier « Radio », dashboard « yabiladi-radio-sante ») :
  *
@@ -64,31 +74,58 @@ const VERBEUX = process.argv.includes("--verbose");
 // La valeur lue dans un fichier de secret est utilisée TELS QUELS, au \r près :
 // mesuré le 2026-11-11, le mot de passe posé sur ce poste porte un « \r » de
 // fin de ligne, la base Grafana l'a enregistré avec, et un « trim() » dans
-// l'outillage produit un 401 « password-auth.failed » sans rapport apparent.
+// l'outillage produit un 401 « password-auth.failed » sans rapport apparent —
+// et consomme une des vingt-cinq tentatives du limiteur d'authentification.
 // Seuls les sauts de ligne finals sont retirés (ce que « $(cat) » fait), pas
 // les retours chariot.
 const lectureSecret = (chemin) => readFileSync(chemin, "utf8").replace(/\n+$/, "");
 
-// Trois façons de s'authentifier, dans cet ordre. La troisième est celle d'un
-// poste ou d'un déploiement qui n'a pas encore reçu de compte de service : le
-// fichier que « tools/logging/bootstrap-grafana-admin.sh » pose sur la machine,
-// lu comme le fait déjà « tools/logging/validate-dashboards.js ». Sur le
-// serveur, ce fichier est en 0640 root:472 et le conteneur dagu (uid 33) ne
-// peut pas l'ouvrir : c'est là que la première forme prend le relais.
+// Un fichier de secret se lit TEL QUEL — un jeton nu, la forme des « *_FILE » de
+// Grafana — ou en bloc « .env », et les DEUX formes existent sur ces machines.
+// Mesuré le 2026-11-11 avec une instance Grafana neuve sous les yeux : la clé
+// que le DAG y fabrique atterrit dans « GRAFANA_SYNC_TOKEN=… », et envoyer le
+// contenu entier comme jeton rend exactement le même 401 qu'une mauvaise clé —
+// donc un message qui accuse l'identification alors que la clé est bonne, écrite
+// et validée deux lignes plus haut par « GET /api/folders ». La ligne nommée est
+// donc déshabillée si elle existe, sinon le contenu est le jeton.
+const lectureJeton = (chemin) => {
+  const texte = lectureSecret(chemin);
+  const m = /^GRAFANA_SYNC_TOKEN=(.*)$/m.exec(texte);
+  return (m ? m[1] : texte).replace(/\r$/, "");
+};
+
+// Code de sortie réservé : « le crédit que j'ai ne vaut pas pour CETTE
+// instance ». C'est ce code que regarde « docker/dagu/ui-git-sync.sh » pour
+// déclencher la fabrication d'une clé Viewer sur place
+// (« tools/sync/bootstrap-grafana-sync-token.mjs ») puis relire la lecture. Un
+// « 1 » reste une panne d'API, sans remède automatique.
+const CODE_SANS_CREDIT = 3;
+function sansCredit(motif) {
+  process.stderr.write(
+    `PAS DE CREDIT: ${motif} pour ${URL_BASE}.\n` +
+    "Une clé de compte de service appartient à la base Grafana qui l'a émise : celle du coffre\n" +
+    "ouvre le poste qui l'a vue naître, pas une instance neuve. Le conducteur de synchro\n" +
+    "(« docker/dagu/ui-git-sync.sh » du dépôt du site) s'en fabrique alors une sur place avec\n" +
+    "« tools/sync/bootstrap-grafana-sync-token.mjs » ; à la main, la même chose :\n" +
+    "  node tools/sync/bootstrap-grafana-sync-token.mjs --out /chemin/cle-grafana\n" +
+    "  GRAFANA_SYNC_TOKEN_FILE=/chemin/cle-grafana node tools/sync/export-grafana.mjs\n" +
+    "La clé fabriquée ne se re-scelle PAS : elle ne vaut que pour cette instance.\n"
+  );
+  process.exit(CODE_SANS_CREDIT);
+}
+
+// Un seul crédit : la clé Viewer du compte de service, en variable ou dans un
+// fichier. Le repli sur le compte administrateur que cette fonction contenait
+// est supprimé, pour deux raisons mesurées : il ne pouvait fonctionner que là où
+// le fichier « docker/grafana/secrets/admin_password » est lisible, donc jamais
+// dans le conteneur dagu (uid 33, fichier en 0640 root:472 sur le serveur) ; et
+// il donnait aux exporteurs un droit d'écriture qu'ils n'ont pas à avoir — ils
+// ne lisent que des dashboards. L'administrateur ne sert qu'à FABRIQUER la clé
+// Viewer, une fois par instance, dans l'outil d'amorçage.
 function authentification() {
-  const jeton = process.env.GRAFANA_SYNC_TOKEN || (process.env.GRAFANA_SYNC_TOKEN_FILE ? lectureSecret(process.env.GRAFANA_SYNC_TOKEN_FILE) : "");
-  if (jeton) return { authorization: `Bearer ${jeton.replace(/\r$/, "")}` };
-  const usager = process.env.GRAFANA_BASIC_USER || process.env.GRAFANA_ADMIN_USER || "yabiladi";
-  let motDePasse = process.env.GRAFANA_BASIC_PASSWORD || (process.env.GRAFANA_BASIC_PASSWORD_FILE ? lectureSecret(process.env.GRAFANA_BASIC_PASSWORD_FILE) : "");
-  if (!motDePasse) {
-    const fichier = process.env.GRAFANA_ADMIN_PASSWORD_FILE || join(RACINES.racine, "docker", "grafana", "secrets", "admin_password");
-    if (existsSync(fichier)) motDePasse = lectureSecret(fichier);
-  }
-  if (!usager || !motDePasse) {
-    process.stderr.write("ERREUR: aucune identification Grafana — GRAFANA_SYNC_TOKEN(_FILE) pour le compte de service, GRAFANA_BASIC_USER + GRAFANA_BASIC_PASSWORD(_FILE), ou le fichier docker/grafana/secrets/admin_password de la machine\n");
-    process.exit(1);
-  }
-  return { authorization: "Basic " + Buffer.from(`${usager}:${motDePasse}`).toString("base64") };
+  const jeton = process.env.GRAFANA_SYNC_TOKEN || (process.env.GRAFANA_SYNC_TOKEN_FILE ? lectureJeton(process.env.GRAFANA_SYNC_TOKEN_FILE) : "");
+  if (!jeton) sansCredit("aucune clé reçue (GRAFANA_SYNC_TOKEN et GRAFANA_SYNC_TOKEN_FILE sont vides)");
+  return { authorization: `Bearer ${jeton.replace(/\r$/, "")}` };
 }
 
 const HEADERS = { ...authentification(), "content-type": "application/json" };
@@ -97,8 +134,7 @@ async function get(url) {
   const res = await fetch(`${URL_BASE}${url}`, { headers: HEADERS });
   const texte = await res.text();
   if (res.status === 401 || res.status === 403) {
-    process.stderr.write(`ERREUR: refusé (${res.status}) par ${URL_BASE} — jeton du compte de service « synchro-ihm » encore valide, ou mot de passe identique à celui de la base ?\n`);
-    process.exit(1);
+    sansCredit(`refusé (${res.status})`);
   }
   if (!res.ok) {
     process.stderr.write(`ERREUR: ${url} → ${res.status} ${texte.slice(0, 200)}\n`);
@@ -276,7 +312,9 @@ async function main() {
     `dashboards : ${recherche.length} dans l'instance, ${ecrits.length} ${CHECK ? "en écart" :("réécrit(s)")}, ${inchanges} inchangé(s), ${informes.length} signal(s)\n`
   );
 
-  // Codes de sortie : 0 rien à dire, 1 échec d'API, 2 écart constaté (--check)
+  // Codes de sortie : 0 rien à dire, 1 échec d'API, 2 écart constaté (--check),
+  // 3 sans crédit (vu par « sansCredit() », seul code que le conducteur sait
+  // réparer tout seul).
   if (CHECK && ecrits.length) process.exit(2);
   if (VERBEUX) process.stdout.write(`base : ${URL_BASE}\n`);
 }
