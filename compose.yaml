@@ -700,6 +700,13 @@ services:
     volumes:
       - ${LOGGING_HOST_DATA_PATH:-/data/logging}/grafana:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      # « :ro » conservé malgré « allowUiUpdates: true » (voir le fichier du
+      # fournisseur) : mesuré sur 13.3.0, une sauvegarde faite dans l'interface
+      # écrit dans la base Grafana et ne touche aucun fichier — l'écriture du
+      # JSON versionné est faite par l'export du DAG « supervision_ui_git_sync »,
+      # pas par le conteneur. Le montage reste donc en lecture seule, et
+      # l'arborescence de déploiement n'est jamais rendue sale par Grafana
+      # lui-même, ce qui aurait bloqué le « git pull » suivant.
       - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
     secrets:
       - grafana_admin_password

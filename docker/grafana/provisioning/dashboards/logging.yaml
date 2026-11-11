@@ -16,9 +16,30 @@
 #   - updateIntervalSeconds: 30 au-dessus du seuil de 10 s : au-delà, Grafana
 #     sonde le répertoire au lieu de s'appuyer sur les événements filesystem,
 #     qui ne remontent pas de façon fiable à travers un bind mount ;
-#   - allowUiUpdates: false et disableDeletion: true : le git reste la seule
-#     source de vérité, un panneau modifié dans l'UI ne peut pas masquer
-#     silencieusement la version versionnée ;
+#   - allowUiUpdates: true depuis le 2026-11-11. Mesuré sur 13.3.0 avec les
+#     deux valeurs, sur « yabiladi-radio-sante » :
+#       « false » → « GET /api/dashboards/uid/… » rend « meta.provisioned:
+#       true » : l'éditeur affiche le dashboard en lecture seule ;
+#       « true »  → « meta.provisioned: false », « canEdit: true » : la
+#       retouche est possible, elle est écrite dans la base Grafana.
+#     Ce que le réglage NE fait PAS (mesuré aussi) : « POST /api/dashboards/db »
+#     — l'ancienne route qui écrivait le JSON provisionné — répond
+#     « Cannot save provisioned dashboard » dans les deux cas, et la route
+#     unifiée (« PUT /apis/dashboard.grafana.app/v1/… », celle de l'éditeur)
+#     répond 200 sans toucher au fichier. Le fichier n'est donc PAS la sortie de
+#     l'interface : c'est le DAG « supervision_ui_git_sync » qui exporte la base
+#     vers « docker/grafana/dashboards » et commite le résultat ;
+#   - consequence de ce qui précède, vérifiée : une retouche en base n'est
+#     pas annulée par le fournisseur tant que le fichier ne bouge pas
+#     (« sourceChecksum » reste égal au checksum du fichier, la sonde de
+#     30 s ne re-provisionne pas). Elle l'est dès que le fichier change — donc
+#     si un « git pull » ramène un JSON plus vieux que la dernière retouche,
+#     l'interface perd la retouche. D'où l'export avant tout « git pull » dans
+#     deploy.sh ;
+#   - disableDeletion: true malgré tout : « delete » n'est pas une retouche
+#     d'IHM qu'on veut voir appliquée toute seule. Un dashboard retiré des
+#     fichiers survit donc dans Grafana, et sa suppression se décide dans git
+#     (« git rm docker/grafana/dashboards/… ») puis par un redéploiement.
 #   - aucun « __inputs » ni « foldersFromFilesStructure » : les deux sont
 #     incompatibles avec un dossier nommé explicite.
 apiVersion: 1
@@ -30,7 +51,7 @@ providers:
     folderUid: 'yabiladi-general'
     type: file
     disableDeletion: true
-    allowUiUpdates: false
+    allowUiUpdates: true
     updateIntervalSeconds: 30
     options:
       path: /var/lib/grafana/dashboards/general
@@ -41,7 +62,7 @@ providers:
     folderUid: 'yabiladi-applications'
     type: file
     disableDeletion: true
-    allowUiUpdates: false
+    allowUiUpdates: true
     updateIntervalSeconds: 30
     options:
       path: /var/lib/grafana/dashboards/applications
@@ -52,7 +73,7 @@ providers:
     folderUid: 'yabiladi-infrastructure'
     type: file
     disableDeletion: true
-    allowUiUpdates: false
+    allowUiUpdates: true
     updateIntervalSeconds: 30
     options:
       path: /var/lib/grafana/dashboards/infrastructure
@@ -64,7 +85,7 @@ providers:
     folderUid: 'yabiladi-backups-batchs'
     type: file
     disableDeletion: true
-    allowUiUpdates: false
+    allowUiUpdates: true
     updateIntervalSeconds: 30
     options:
       path: /var/lib/grafana/dashboards/backups-batchs
@@ -84,7 +105,7 @@ providers:
     folderUid: 'yabiladi-radio'
     type: file
     disableDeletion: true
-    allowUiUpdates: false
+    allowUiUpdates: true
     updateIntervalSeconds: 30
     options:
       path: /var/lib/grafana/dashboards/radio
