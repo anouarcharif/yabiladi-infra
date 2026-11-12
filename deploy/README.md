@@ -12,7 +12,8 @@ commit, et `git pull` le diffuse.
 
 | Bloc chiffré (versionné)                     | Posé sur la machine                 | Qui le lit                                    |
 |----------------------------------------------|-------------------------------------|-----------------------------------------------|
-| `deploy/secrets/env.local.sops.bin`          | `.env.local` (0644)                 | Symfony (Dotenv), dans le conteneur php       |
+| `deploy/secrets/env.local.sops.bin`          | `.env.local` (0644)                 | `deploy.sh` de l'infra, sur l'hôte : il en dérive le secret SMTP de Grafana. Une seule variable (`BOT_MONITOR_MAILER_DSN`), les noms se lisent dans `deploy/secrets/env.local.example` |
+| `deploy/secrets/env.local.site.sops.bin`     | `.env.local` du dépôt du site (0644) | Symfony (Dotenv), dans le conteneur php      |
 | `deploy/secrets/credentials.sops.bin`        | `docker/legacy/credentials.env` (0600) | démon docker, via `env_file` des services  |
 | `deploy/secrets/dbackup.sops.bin`            | `docker/legacy/dbackup.env` (0600)    | démon docker (`env_file` du service `dbackup`) — clés internes de la console et compte admin |
 | `deploy/secrets/htpasswd_user_yabiladi.sops.bin` | `docker/traefik/htpasswd/user_yabiladi` (0600) | Traefik (`basicauth` de dagu, grafana, dbackup, tableau de bord) |
@@ -54,25 +55,31 @@ en place** (vérifié avec un `HOME` vidé et avec une clé d'une autre machine)
 
 Chaque dépôt a son `deploy.sh` autonome. Celui de la pile ne touche qu'à la pile : il ne tire
 pas les dépôts voisins, ne matérialise pas leurs secrets et ne crée ni ne recrée leurs
-conteneurs — les deux applications vivent sous leur propre profil Compose, activé par leur
-seul script.
+conteneurs — chaque projet a son propre fichier Compose et son nom de projet.
 
-| Depuis | Ce qui est déployé |
-|---|---|
-| `Yabiladi-V2-Symfony/` | site principal, forum, radio, Traefik, journalisation, console de sauvegarde |
-| `Yabiladi-Mediakit-V2/` | `pub.yabiladi.com` : secret, dossiers, `mediakit-php`/`-nginx`, cache, PDF, contrôles |
-| `Yabiladi-Facturation-V2/` | `ws.yabiladi.com` : secret, dossiers, `facturation-php`/`-nginx`, cache, contrôles |
+| Depuis | Ce qui est déployé | Emplacement sur la cible |
+|---|---|---|
+| `Yabiladi-Infra/` (ce dépôt) | Traefik, DBackup, Loki/Alloy/Grafana, Prometheus/cAdvisor/node-exporter, Postfix, geoipupdate | `/opt/yabiladi-infra` |
+| `Yabiladi-V2-Symfony/` | site, forum, Dagu, les quatre antennes, Navidrome, nginx | `/opt/yabiladi-symfony` |
+| `Yabiladi-Mediakit-V2/` | `pub.yabiladi.com` : `mediakit-php`/`-nginx`, cache, PDF, contrôles | `/opt/yabiladi-mediakit` |
+| `Yabiladi-Facturation-V2/` | `ws.yabiladi.com` : `facturation-php`/`-nginx`, cache, contrôles | `/opt/yabiladi-facturation` |
 
 ```bash
-cd ../Yabiladi-Mediakit-V2 && bash deploy.sh          # médiakit seulement
-cd ../Yabiladi-Facturation-V2 && bash deploy.sh       # intranet seulement
-cd ../Yabiladi-V2-Symfony && bash deploy.sh           # pile seulement
+bash deploy.sh                                   # la pile, et elle seule
+cd ../Yabiladi-V2-Symfony    && bash deploy.sh   # site + Dagu + radio
+cd ../Yabiladi-Mediakit-V2   && bash deploy.sh   # médiakit seulement
+cd ../Yabiladi-Facturation-V2 && bash deploy.sh  # intranet seulement
 ```
 
-Les trois acceptent `--build` et `--secrets`. Chacun ne matérialise que ses propres blocs du
-coffre : la pile restreint `SECRETS_ONLY` aux entrées du site et de l'infrastructure, chaque
-application au sien. La pile est attendue à côté du dépôt applicatif ; `YABILADI_STACK_DIR`
-désigne un autre emplacement.
+La pile se déploie en premier : les trois autres déclarent ses réseaux (`app`, `logging`)
+et son volume `geoip_data` en `external: true`, et s'arrêtent si l'objet manque.
+
+Les quatre acceptent `--build`, `--secrets`, `--encrypt` et `--verify`. Chacun ne matérialise
+que ses propres blocs du coffre, par la colonne `project` du manifeste puis, sauf pose
+explicite de `SECRETS_ONLY`, par la liste par défaut de son script : `env.local,dbackup,geoip,htpasswd,grafana-admin`
+ici, `env.local.site,credentials,ui-sync` côté site, `facturation.env` et `mediakit.env` de
+leur côté. L'emplacement de la pile se redéclare par `YABILADI_INFRA_DIR` (défaut versionné :
+`/opt/yabiladi-infra`) dans le `.env` du dépôt appelant.
 
 ## Faire tourner un secret
 
@@ -122,7 +129,8 @@ et `401` avec un mauvais mot de passe).
   commande porte donc `--user www-data`.
 * **`--env=prod` n'est pas la vérité d'une machine.** Le `.env` versionné dit `APP_ENV=dev`,
   `APP_DEBUG=1`, et rien dans le dépôt ne dit au serveur d'être autre chose que ce que sa machine
-  déclare (`APP_ENV` dans le `.env.local` scellé, ou la variable d'environnement du conteneur).
+  déclare (`APP_ENV` dans le `.env.local` scellé **du site**, ou la variable
+  d'environnement du conteneur — celui de l'infra ne porte plus que le DSN SMTP).
   Vider le cache d'un environnement que l'application n'utilise pas laisse croire au rafraîchissement
   sans le produire. `deploy.sh` vide l'environnement résolu et **l'affiche** avant le contrôle HTTP.
 

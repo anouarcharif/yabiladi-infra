@@ -70,3 +70,21 @@ docker/grafana/dashboards/**/*.json text eol=lf
 # apparent). Les six gabarits suivis sont déjà en LF ; la règle empêche le
 # prochain aller-retour git de les convertir avant la copie.
 *.example text eol=lf
+
+# Deux fichiers que l'on ne copie nulle part, mais que des processeurs LISENT
+# depuis le dépôt, sur ce poste comme dans leurs conteneurs.
+#
+#   - « .env » : Docker Compose l'interpole à partir du fichier du dépôt. Une
+#     valeur qui finit par « \r » n'est pas de la mise en forme — un chemin de
+#     montage devient introuvable, un port devient invalide, et l'erreur remontée
+#     n'a plus de rapport avec la ligne fautive.
+#   - « deploy/secrets.manifest » : « deploy/secrets.sh » le lit ligne à ligne
+#     dans le conteneur du coffre (bind mount du dépôt). Le retour chariot se
+#     logerait dans le NOM du bloc chiffré, et SOPS refuserait une règle de
+#     création.
+#
+# Mesuré le 2026-11-12 : les deux sont en LF dans l'index comme sur le disque ;
+# « git ls-files --eol » les rendait pourtant « w/lf » sans règle, donc à la
+# merci d'un « git checkout » sous core.autocrlf=true au niveau SYSTÈME.
+.env text eol=lf
+deploy/secrets.manifest text eol=lf

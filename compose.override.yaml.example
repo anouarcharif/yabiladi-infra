@@ -57,6 +57,57 @@ services:
   dbackup:
     labels:
       - "traefik.http.routers.dbackup.tls.certresolver="
+    # ---------------------------------------------------------------------------
+    # Les chemins d'hôte que la console monte et écrit. Chacune des clés
+    # correspondantes a sa valeur de SERVEUR dans le « .env » versionné ; un poste
+    # de travail doit les redéclarer ICI, et pas dans « .env.local ».
+    #
+    # Deux raisons, toutes deux mesurées :
+    #  - Compose n'interpole « ${CLE} » qu'à partir de son shell et du .env posé à
+    #    côté de lui ; une valeur écrite dans .env.local n'atteint un montage que
+    #    parce que deploy.sh publie ce fichier au shell avant l'appel ;
+    #  - .env.local est la SOURCE CLAIRE du coffre : matérialiser, c'est « mv -f ».
+    #    Y loger des chemins locaux, c'est les écraser au premier déploiement et
+    #    les faire remonter dans un bloc chiffré que le serveur applique partout.
+    # Depuis le 2026-11-12, le scellement d'infra ne porte plus que
+    # BOT_MONITOR_MAILER_DSN ; gabarit des noms : deploy/secrets/env.local.example.
+    #
+    # Compose fusionne les volumes par POINT DE MONTAGE : chaque ligne remplace sa
+    # doublure dans compose.yaml et laisse les autres intactes (dbackup_data,
+    # dbackup_tmp, /opt/backup-tools, le volume ACME, docker/traefik). Pas de
+    # « !override » ici : on ne remplace que les montages concernés.
+    #
+    # Un chemin absent n'est pas neutre : Docker CREATE la source manquante sur le
+    # VM, et le job correspondant archive un dossier vide en se disant « réussi ».
+    # C'est le seul mode de panne silencieuse de cette console — vérifier ce que la
+    # machine résout réellement :
+    #   docker compose config dbackup | sed -n '/volumes:/,/networks:/p'
+    # (« config --volumes » ne liste que les NOMS de volumes, pas les montages.)
+    # ---------------------------------------------------------------------------
+    volumes:
+      # Destination des archives et atelier de restauration : ÉCRITURE, jamais « :ro ».
+      - <dossier-d-archives>:/backups
+      - <dossier-de-tri>:/restore
+      # Les arbres du site, à leurs emplacements locaux (sur la cible : le webroot
+      # de la V1, hors dépôt). Les deux valeurs doivent être celles que le
+      # compose.yaml du site monte pour php et nginx.
+      - <depot-site>/public/files:/backup/media:ro
+      - <depot-site>/public/img:/backup/editor-images:ro
+      # Les dépôts voisins, à leur racine ; leurs jobs naissent désactivés.
+      - <depot-mediakit>:/backup/mediakit:ro
+      - <depot-facturation>:/backup/facturation:ro
+      # Dossiers de mariabackup : le DAG du site y écrit, le job « mariadb-physical »
+      # y lit. Valeur ABSOLUE et identique dans les deux dépôts — deux chemins
+      # relatifs semblables ne désignent pas le même dossier.
+      - <dossier-mariadb-backup>:/backup/mariadb-backups:ro
+      # Discothèque des quatre antennes : le même arbre que celui que montent les
+      # conteneurs radio du site.
+      - <discotheque>:/backup/radio-content:ro
+      # Base Grafana. Si la pile de mesures est sur un volume nommé (voir le bloc
+      # « grafana » plus haut), monter CE VOLUME et non un chemin inventé : mesuré
+      # le 2026-11-12, « /backup/grafana » pointé sur un dossier créé par Docker
+      # donnait une archive de 0 octet annoncée « réussie ».
+      - grafana_data:/backup/grafana:ro
 
   # ---------------------------------------------------------------------------
   # Déplacement des données de la pile de mesure sur le stockage du VM Docker

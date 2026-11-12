@@ -119,6 +119,12 @@ compose_value() { # $1 clé, $2 défaut
 # elle. Seule la forme « CLE=valeur » est retenue, débarrassée de ses
 # guillemets comme le fait « compose_value » — les deux calculs doivent tomber
 # d'accord, c'est tout l'objet de ce bloc.
+#
+# Ce que publie CE dépôt depuis le 2026-11-12 : une seule ligne, le DSN Resend,
+# que Compose n'interpole nulle part (c'est deploy.sh qui le lit, hôte). Le bloc
+# reste parce que c'est le seul canal du fichier machine, et qu'un projet qui y
+# déclarerait un chemin le verrait appliqué — ce que les montages de la console
+# ne doivent plus jamais à un bloc chiffré, mais toujours à compose.override.yaml.
 export_machine_env() {
     [ -f "$REPO/.env.local" ] || return 0
     local line key value
@@ -406,9 +412,9 @@ prepare_backups() {
         case "$cible" in
             "$REPO" | "$REPO"/*)
                 if [ "$cle" = "DBACKUP_DEST_HOST_PATH" ]; then
-                    die "$cle = « ${valeur:-<défaut du .env>} » : les archives sortiraient dans le dépôt ($cible). Poser le répertoire du NFS de sauvegarde dans .env.local (gabarit : deploy/secrets/env.local.example), re-sceller le coffre, puis relancer."
+                    die "$cle = « ${valeur:-<défaut du .env>} » : les archives sortiraient dans le dépôt ($cible). Le répertoire du NFS de sauvegarde se pose dans le « .env » versionné (un commit, donc), ou le montage se remplace source par source dans compose.override.yaml — jamais dans .env.local, qui n'est plus que la source claire du DSN SMTP et serait écrasé au déploiement."
                 fi
-                log "  · ATTENTION : $cle = « ${valeur:-<défaut du .env>} » tombe dans le dépôt ($cible) — désigner un disque qui a la place dans .env.local."
+                log "  · ATTENTION : $cle = « ${valeur:-<défaut du .env>} » tombe dans le dépôt ($cible) — désigner un disque qui a la place dans le « .env » versionné, ou dans compose.override.yaml sur ce poste."
                 ;;
         esac
     done
@@ -429,7 +435,7 @@ prepare_backups() {
             ./*) app="$REPO/${app#./}" ;;
             *) app="$REPO/$app" ;;
         esac
-        [ -d "$app" ] || log "  · ATTENTION : $cle_app = « $app » n'existe pas — déclarer l'emplacement réel dans .env.local (gabarit : deploy/secrets/env.local.example), re-sceller le coffre, puis relancer. Les jobs qui lisent cette racine n'archiveront rien."
+        [ -d "$app" ] || log "  · ATTENTION : $cle_app = « $app » n'existe pas — la valeur de serveur se corrige dans le « .env » versionné, celle d'un poste dans compose.override.yaml (montage remplacé). Les jobs qui lisent cette racine n'archiveront rien."
     done
 
     # La base Grafana se lit dans un SOUS-dossier de la racine de mesures : là,
@@ -443,7 +449,7 @@ prepare_backups() {
     local ylog
     ylog="$(compose_value LOGGING_HOST_DATA_PATH /data/logging)"
     [[ "$ylog" = /* ]] || ylog="$REPO/${ylog#./}"
-    [ -d "$ylog/grafana" ] || log "  · ATTENTION : $ylog/grafana n'existe pas — le job « Fichiers - grafana » archivera un dossier vide. Ou Grafana n'a pas encore démarré sur cette machine, ou LOGGING_HOST_DATA_PATH ne désigne pas l'arbre que le service écrit (gabarit : deploy/secrets/env.local.example)."
+    [ -d "$ylog/grafana" ] || log "  · ATTENTION : $ylog/grafana n'existe pas — le job « Fichiers - grafana » archivera un dossier vide. Ou Grafana n'a pas encore démarré sur cette machine, ou LOGGING_HOST_DATA_PATH (ligne du « .env » versionné) ne désigne pas l'arbre que le service écrit — sur un poste de développement, le montage se remplace par son volume dans compose.override.yaml."
 
     # « media » et « editor-images » ne désignent pas le dépôt du site : depuis la
     # bascule, les écritures de PHP — médias et dossier de l'éditeur TinyMCE —

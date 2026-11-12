@@ -97,11 +97,13 @@ Deux dérivations mesurées ce jour-là, toutes deux gardées dans le code :
   dans leur manifeste, sur les dix. `dbackup-bootstrap.mjs` compare désormais le
   `basePath` à ce que porte le montage et le corrige par `PUT` ; après correction,
   le job Grafana rend 5 fichiers pour 5,41 Mio.
-- `docker compose up -d` joué à la main sur le poste ne publie pas `.env.local` :
-  Compose n'interpole ses variables qu'auprès de son shell et du `.env` versionné,
-  et `deploy.sh` fait le reste avec `export_machine_env`. Sauter cette étape remonte
-  les replis du `.env` — des chemins de production — et la console archive un
-  dossier vide sans erreur. Le `up -d` passe par `./deploy.sh`.
+- les chemins que ces montages désignent ne viennent plus d'un fichier chiffré.
+  Le `.env` versionné porte ceux du serveur, `compose.override.yaml` porte ceux du
+  poste — et `deploy.sh` publie bien toujours `.env.local` au shell avant d'appeler
+  Compose (`export_machine_env`), ce qui faisait remonter des chemins de dev sur la
+  cible si le scellement en portait. Depuis le nettoyage du 2026-11-12, ce fichier
+  ne contient plus que le DSN Resend : plus rien de ce qu'il porte ne peut écraser
+  un montage.
 
 Reste, à jouer une fois par machine et non par le code : associer un profil de
 chiffrement aux jobs (l'API ne le permet pas) et supprimer le job agrégé « Données
