@@ -462,6 +462,24 @@ services:
       # erreur. Le .env versionné porte la valeur du serveur (/data/radio_content),
       # la même que celle du dépôt du site.
       - ${RADIO_CONTENT_HOST_PATH:-./data/radio_content}:/backup/radio-content:ro
+      # Base de Grafana : le SQLite où l'interface écrit ce que quelqu'un retouche
+      # dans « Dashboards ». Depuis le 2026-11-11 le DAG de synchro reporte ces
+      # retouches en git toutes les quinze minutes, mais entre deux passes — et pour
+      # tout ce que le miroir ne relit pas (comptes, préférences, états d'alerte) —
+      # ce fichier est le seul endroit où elles vivent. Mesuré le 2026-11-12 :
+      # « grafana.db » fait 5,2 Mo sur les 579,7 Mo du dossier ; les 573,8 Mo
+      # restants sont « plugins/ », du code rejouable, écarté par le job.
+      #
+      # Sous-dossier seul, et non la racine « LOGGING_HOST_DATA_PATH » en bloc :
+      # « loki » et « prometheus » y dorment à côté et ne sont pas des données à
+      # restaurer — journaux et séries se reconstituent, et la maison les a déjà
+      # sortis du périmètre le 2026-11-09 avec les journaux Symfony du site. Monter
+      # la racine aurait fait de « Fichiers - logs » un job qui archive une base
+      # Grafana sous un nom de journal.
+      #
+      # Même variable que les trois services, donc la cible est exactement l'arbre
+      # que Grafana écrit, jamais un second chemin à tenir à jour.
+      - ${LOGGING_HOST_DATA_PATH:-/data/logging}/grafana:/backup/grafana:ro
     ports:
       - "127.0.0.1:${DBACKUP_HTTP_PORT:-8087}:3000"
     healthcheck:

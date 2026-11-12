@@ -73,3 +73,41 @@ re-scellée, jamais affichée. L'administrateur ne sert qu'à cette fabrication 
 passe faite dans l'interface demande de re-sceller `grafana-admin` puis `ui-sync`,
 dans cet ordre.
 
+## La base Grafana est sauvegardée, elle aussi
+
+Ce que l'IHM retouche vit dans `grafana.db`, et la synchro ci-dessus ne passe que
+toutes les quinze minutes : entre deux passes, une retouche n'est nulle part.
+`compose.yaml` monte donc le dossier seul — `${LOGGING_HOST_DATA_PATH}/grafana`,
+jamais `/data/logging` en bloc, Loki et Prometheus restant hors du périmètre — et
+`tools/backup/jobs.json` déclare le job « Fichiers - grafana » à 04:04. Mesuré le
+2026-11-12 sur ce dossier : 579,7 Mio, dont 573,8 Mio sous `plugins/` que huit
+montages parcourent sans jamais le lire ; le job l'exclut (`**/plugins/**`) et
+archive les 5,2 Mio qui comptent.
+
+Le montage est en lecture seule, encore faut-il que le conteneur puisse lire. Le
+processus DBackup tourne avec `PGID=33` ; `prepare_logging` pose des fichiers que
+Grafana détient en propre, d'où `open_grafana_data_to_backup` dans `deploy.sh` :
+`chgrp 33` et `chmod g+rx` sur le dossier, `g+rX` sur son contenu, `plugins*`
+laissés tranquilles puisqu'exclus.
+
+Deux dérivations mesurées ce jour-là, toutes deux gardées dans le code :
+
+- l'adaptateur SOURCE avait un `basePath` à `/backups` depuis le 2026-11-01. Les
+  jobs de fichiers archivaient donc 0 octet en se disant « Success » — `files: 0`
+  dans leur manifeste, sur les dix. `dbackup-bootstrap.mjs` compare désormais le
+  `basePath` à ce que porte le montage et le corrige par `PUT` ; après correction,
+  le job Grafana rend 5 fichiers pour 5,41 Mio.
+- `docker compose up -d` joué à la main sur le poste ne publie pas `.env.local` :
+  Compose n'interpole ses variables qu'auprès de son shell et du `.env` versionné,
+  et `deploy.sh` fait le reste avec `export_machine_env`. Sauter cette étape remonte
+  les replis du `.env` — des chemins de production — et la console archive un
+  dossier vide sans erreur. Le `up -d` passe par `./deploy.sh`.
+
+Reste, à jouer une fois par machine et non par le code : associer un profil de
+chiffrement aux jobs (l'API ne le permet pas) et supprimer le job agrégé « Données
+de l'application et volumes Docker », que les jobs par dossier remplacent.
+L'amorçage le rappelle à chaque passe tant que ces deux états durent. C'est ainsi
+que « Fichiers - logs » a été signalé puis retiré de la déclaration : un job effacé
+dans l'IHM laisse son dossier d'archives derrière lui, que plus aucune rétention ne
+purge.
+

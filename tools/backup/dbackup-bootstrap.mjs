@@ -143,11 +143,17 @@ const NAMES = {
 // à 04:32. Les deux créneaux laissés libres le 2026-11-09 par le retrait des
 // jobs « scripts » et « prayer-pdfs » ont été reboutés, et l'instance en place a
 // été réalignée dans la foulée — l'amorçage, lui, ne touche jamais une
-// planification déjà créée (elle appartient à l'interface). Le même mouvement
-// ferme le trou de 04:04 laissé par « logs » le 2026-11-09 : « var/log » est
-// sorti du périmètre (les journaux Symfony ne sont pas une donnée à restaurer),
-// et la planification des jobs restants se décale d'autant sur une machine
-// neuve. Sur une instance déjà amorcée, ces minutes restent celles de
+// planification déjà créée (elle appartient à l'interface). Le créneau de 04:04,
+// laissé libre le 2026-11-09 quand « var/log » est sorti du périmètre (les
+// journaux Symfony ne sont pas une donnée à restaurer), est repris le 2026-11-12
+// par « Fichiers - grafana ». La ligne « Fichiers - logs » sort de ce fait de la
+// déclaration : elle n'avait plus de montage depuis ce retrait. Mais l'amorçage
+// ne supprime jamais un job (voir « signalerEtatDesJobs ») — sur une machine déjà
+// amorcée, « Fichiers - logs » reste donc une ligne à effacer à la main dans
+// « Jobs », puis son dossier d'archives à enlever sur le dépôt. Vérifié ici le
+// 2026-11-12 avant le geste : le manifeste de l'archive du 2026-11-10 porte
+// « files: 0 » et « logicalSize: 0 » — rien à quoi une restauration pourrait
+// revenir. Sur une instance déjà amorcée, ces minutes restent celles de
 // l'interface : le décalage se décide dans « Jobs », job par job. Un écartement
 // ne sérialise rien — « media » court encore quand le suivant démarre —, il
 // baisse seulement le pic de lectures simultanées sur le NFS de destination. Le
@@ -228,6 +234,14 @@ const EXCLUDES = [
   "**/node_modules/**",
   "**/vendor/**",
   "**/chromium/**",
+  // Extensions Grafana installées depuis l'interface : du code, pas une donnée.
+  // 573,8 Mo mesurés le 2026-11-12 sur les 579,7 Mo du dossier sauvegardé — le
+  // « grafana.db » de 5,2 Mo est tout ce que l'archive doit rapporter. Le motif
+  // est global, et il ne peut mordre aujourd'hui que sur celui-là : les huit
+  // arbres déjà montés sous « /backup » (médias, images de l'éditeur, traefik,
+  // acme, mediakit, facturation, mariabackup, discothèque radio) ont été fouillés
+  // le même jour, aucun ne contient de dossier « plugins ».
+  "**/plugins/**",
   // Journaux legacy gonflés par des cron V1 toujours actifs. Pas de « *.log » en
   // bloc : ces six motifs sont nommés un par un, et une règle globale écarterait
   // sans le dire n'importe quel journal tombé dans un dossier média. (« var/log »
@@ -390,13 +404,42 @@ async function listAdapters(type) {
 async function ensureStorageAdapter(name, role, config) {
   const found = (await listAdapters("storage")).find((a) => a.name === name && a.storageRole === role);
   if (found) {
-    log(`  · adaptateur ${role.toLowerCase()} « ${name} » : déjà en place`);
+    // « déjà en place » ne dit pas « à la bonne racine ». Mesuré le 2026-11-12 :
+    // l'adaptateur SOURCE « Données de l'application (lecture seule) » portait
+    // « basePath: /backups » — la racine des ARCHIVES, créée ainsi le 2026-11-01 —
+    // et le job lisait donc « /backups/media », « /backups/traefik-config »… donc
+    // rien. Chacune des dix archives produites sur le poste depuis ce jour porte
+    // « files: 0 », « logicalSize: 0 » et un statut « Success » : la console ne
+    // signale pas une source vide, elle la déclare archivée. D'où le contrôle, et
+    // sa réparation.
+    //
+    // Le PUT est partiel (mesuré ici : il rend 200 et conserve le nom, le rôle et
+    // les métadonnées) — il ne touche donc pas ce que l'interface seule sait poser.
+    const courant = basePathAdaptateur(found.config);
+    if (courant !== config.basePath) {
+      const corrige = await call("PUT", `/api/adapters/${found.id}`, { config });
+      if (corrige.status !== 200) {
+        die(`adaptateur « ${name} » : basePath « ${courant} » ≠ « ${config.basePath} » et le PUT a été refusé (${corrige.status}) — sans correction, chaque job archive un chemin qui n'existe pas et se dit « réussi »`);
+      }
+      log(`  · adaptateur ${role.toLowerCase()} « ${name} » : basePath corrigé « ${courant} » → « ${config.basePath} » (les jobs lisaient la racine des archives, pas les données)`);
+    } else {
+      log(`  · adaptateur ${role.toLowerCase()} « ${name} » : déjà en place (${config.basePath})`);
+    }
     return found.id;
   }
   const r = await call("POST", "/api/adapters", { name, type: "storage", adapterId: "local-filesystem", config, storageRole: role });
   if (r.status !== 201) die(`création de l'adaptateur « ${name} » (${r.status}) : ${r.text.slice(0, 200)}`);
   log(`  · adaptateur ${role.toLowerCase()} « ${name} » : créé (${config.basePath})`);
   return r.json.id;
+}
+
+// « GET /api/adapters » rend le config en chaîne JSON, « POST » en objet : les
+// deux formes se lisent ici, sinon la comparaison ci-dessus échouerait pour la
+// moitié des instances et corrigerait en boucle un basePath déjà juste.
+function basePathAdaptateur(config) {
+  if (!config) return null;
+  if (typeof config === "object") return config.basePath ?? null;
+  try { return JSON.parse(config).basePath ?? null; } catch { return null; }
 }
 
 async function listJobs() {

@@ -13,9 +13,60 @@
 # évitent qu'un blob de 9 400 octets de base64 paraisse diffable ou fusionnable :
 # un bloc chiffré se remplace, il ne se relit pas ligne à ligne.
 #
-# Le motif vise « deploy/secrets/ » et rien d'autre : c'est là que vivent les
-# secrets, et le reste du dépôt (YAML, shell, mjs) garde les conventions
-# d'avant — aucun « eol=lf » global n'est posé ici, il renormaliserait des
-# milliers de lignes sans rapport avec ce chantier.
+# Le motif vise « deploy/secrets/ » pour le binaire : c'est là que vivent les
+# secrets. Le reste du dépôt n'est pas laissé sans règle — voir plus bas, qui
+# traite les fichiers qu'un interpréteur exécute. Aucun « * text=auto » ici : il
+# renormaliserait des milliers de lignes sans rapport avec ce chantier.
 deploy/secrets/*.sops.bin -text -diff -merge
 deploy/secrets/*.sops.env -text -diff -merge
+
+# Les scripts que lit un conteneur (ou Git Bash) partent en LF.
+#
+# Mesuré le 2026-11-11 sur le dépôt du site, le même réglage système
+# (« core.autocrlf=true » vient de « C:/Program Files/Git/etc/gitconfig », ni en
+# local ni en global) a écrit des retours chariot dans un script monté tel quel
+# dans un conteneur, et le conducteur de la synchro d'interface mourait à sa
+# deuxième ligne sur « set: pipefail: invalid option name » — le CR n'apparaît
+# pas dans le message. Ce dépôt-ci est vierge (9 « .sh » et 4 « .mjs »/« .js »,
+# tous en LF sur le disque) : la règle n'est donc qu'un garde-fou, posé avant la
+# première passe de « git checkout » ou de « git rebase --autostash » qui ne le
+# dira pas.
+#
+# Ce que la règle protège : « deploy.sh » et « deploy/secrets.sh », appelés sur
+# l'hôte en bash ; « docker/postfix/entrypoint.sh » et « docker/traefik/generate-*.sh »,
+# exécutés dans un conteneur ; les outils « tools/** » que le DAG de synchro
+# relit depuis son clone de l'infra, en node. Un retour chariot y casse une
+# option, une comparaison de chaîne, ou — pour une valeur — devient un caractère
+# de la valeur.
+*.sh text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+
+# La surface que la synchro d'interface écrit dans CE dépôt, elle aussi en LF.
+#
+# Le DAG de synchro clone ce dépôt dans son conteneur, y relit les dashboards et
+# « tools/backup/jobs.json » (« tools/sync/export-grafana.mjs »,
+# « dbackup-bootstrap.mjs --export »), puis commite et pousse. Ces outils
+# écrivent du LF. Un poste qui checkoute ces chemins sous « core.autocrlf=true »
+# reçoit donc du CRLF et rend du LF au nettoyage : « git status » dit alors le
+# fichier modifié alors que son contenu n'a pas bougé, et la première retouche
+# humaine y remet des fins de ligne différentes — sur le fichier qui déclare le
+# périmètre des sauvegardes, là où une fausse alerte coûte cher à démêler.
+#
+# Mesuré le 2026-11-12 : les quatorze dashboards et « jobs.json » sont déjà en LF,
+# sur le disque comme dans les blobs. La règle ne renormalise rien, elle empêche
+# seulement le prochain aller-retour de le faire.
+tools/backup/jobs.json text eol=lf
+docker/grafana/dashboards/**/*.json text eol=lf
+
+# Les gabarits que la machine copie pour vivre, aussi.
+#
+# « deploy/secrets/env.local.example » devient « .env.local », «
+# docker/legacy/*.env.example » deviennent les « env_file » des conteneurs,
+# « compose.override.yaml.example » devient le surcharge du poste. Dans un
+# fichier dotenv, un retour chariot en fin de ligne n'est pas de la mise en
+# forme : c'est un caractère DE LA valeur (mesuré côté Grafana le 2026-11-11, où
+# le mot de passe lu portait un « \r » et valait donc un « 401 » sans rapport
+# apparent). Les six gabarits suivis sont déjà en LF ; la règle empêche le
+# prochain aller-retour git de les convertir avant la copie.
+*.example text eol=lf

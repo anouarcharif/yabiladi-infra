@@ -432,6 +432,19 @@ prepare_backups() {
         [ -d "$app" ] || log "  · ATTENTION : $cle_app = « $app » n'existe pas — déclarer l'emplacement réel dans .env.local (gabarit : deploy/secrets/env.local.example), re-sceller le coffre, puis relancer. Les jobs qui lisent cette racine n'archiveront rien."
     done
 
+    # La base Grafana se lit dans un SOUS-dossier de la racine de mesures : là,
+    # « la racine existe » ne dit rien de ce que le job archive, et la boucle ci
+    # dessus ne peut pas le couvrir. Le dossier, c'est Grafana lui-même qui le crée
+    # au premier démarrage ; s'il manque au « up -d », Docker le pose vide et
+    # « Fichiers - grafana » se dirait « réussi » en archivant 0 octet. C'est le
+    # seul job du périmètre dont un échec silencieux ferait perdre quelque chose
+    # d'irremplaçable : les retouches faites dans l'interface que le DAG de synchro
+    # n'a pas encore reportées en git.
+    local ylog
+    ylog="$(compose_value LOGGING_HOST_DATA_PATH /data/logging)"
+    [[ "$ylog" = /* ]] || ylog="$REPO/${ylog#./}"
+    [ -d "$ylog/grafana" ] || log "  · ATTENTION : $ylog/grafana n'existe pas — le job « Fichiers - grafana » archivera un dossier vide. Ou Grafana n'a pas encore démarré sur cette machine, ou LOGGING_HOST_DATA_PATH ne désigne pas l'arbre que le service écrit (gabarit : deploy/secrets/env.local.example)."
+
     # « media » et « editor-images » ne désignent pas le dépôt du site : depuis la
     # bascule, les écritures de PHP — médias et dossier de l'éditeur TinyMCE —
     # restent sous le webroot V1, toujours en service, que le site relaie par deux
@@ -494,6 +507,36 @@ open_acme_to_backup() {
     docker compose exec -T --user root traefik sh -c \
         'chgrp 33 /letsencrypt/acme.json 2>/dev/null; chmod 0640 /letsencrypt/acme.json 2>/dev/null; true' \
         >/dev/null 2>&1 || log "     acme.json non rendu lisible (Traefik arrêté ?) : le job de sauvegarde le signalera"
+}
+
+# Même problème pour la base Grafana. Mesuré le 2026-11-12 : « grafana.db » sort
+# en 0640 grafana:472 (uid 472 dans le conteneur) et ses dossiers voisins en 0700,
+# alors que le processus de la console tourne en uid 1001, groupe 33 (PGID de
+# compose.yaml — « REFUSEE en 1001:1001 » mesuré le 2026-11-02, lecture OK avec
+# 33). Sans ouverture, le job « Fichiers - grafana » sauterait la seule donnée que
+# ni git ni une base applicative ne portent, en se disant « partiel ».
+#
+# On ne touche que ce que le job archive : le groupe devient 33 et le groupe lit,
+# l'utilisateur écrit comme avant — Grafana reste uid 472, owner du fichier, donc
+# RIEN n'est dessaisi. Et « plugins/ » est sauté : c'est le motif que le job écarte
+# déjà, 573,8 Mo de milliers de fichiers sur lesquels un « chgrp -R » n'a rien à
+# faire chaque déploiement.
+#
+# Un redémarrage de Grafana qui recréerait ses fichiers en 472:472 remettrait le
+# sujet à plat : le prochain déploiement le corrige, et la sauvegarde du soir le
+# dit avant lui.
+open_grafana_data_to_backup() {
+    docker compose exec -T --user root grafana sh -c '
+        base=/var/lib/grafana
+        chgrp 33 "$base" 2>/dev/null; chmod 0750 "$base" 2>/dev/null
+        for d in "$base"/*; do
+            [ -e "$d" ] || continue
+            case "$(basename "$d")" in plugins|plugins-bundled) continue ;; esac
+            chgrp -R 33 "$d" 2>/dev/null
+            chmod -R g+rX "$d" 2>/dev/null
+        done
+        true' >/dev/null 2>&1 \
+        || log "     base Grafana non rendue lisible (Grafana arrêté ?) : le job « Fichiers - grafana » se signalera partiel"
 }
 
 # Migration de la console de sauvegarde (novembre 2026) : Backrest a été retiré de
@@ -720,6 +763,7 @@ case "$verbe" in
         reapply_htpasswd "$hta_before"
         retire_old_backup_console
         open_acme_to_backup
+        open_grafana_data_to_backup
         bootstrap_backups
         ensure_logging_mounts
         checks_infra
@@ -759,6 +803,7 @@ case "$verbe" in
         reapply_htpasswd "$hta_before"
         retire_old_backup_console
         open_acme_to_backup
+        open_grafana_data_to_backup
         bootstrap_backups
         ensure_logging_mounts
 
