@@ -1,0 +1,370 @@
+name: yabiladi-docker-admin
+
+# ============================================================================
+# Console d'administration et de consultation des logs Docker.
+#
+# Troisième brique d'administration de la pile, à côté de Dagu (les traitements)
+# et de DBackup (les archives), dans le même dépôt que le proxy : deux interfaces
+# seulement, Portainer pour l'état de Docker, Dozzle pour ses journaux.
+#
+# Déploiement : « bash docker-admin/scripts/deploy.sh » depuis la racine du dépôt
+# (ou « ./scripts/deploy.sh » d'ici). Cette stack ne pilote AUCUN autre projet :
+# elle ne touche ni au site, ni à la facturation, ni au médiakit, ne redémarre
+# aucun conteneur qui n'est pas le sien, et ne fait ni « git pull » ni
+# « docker system prune ». Le deploy.sh du dépôt voisin reste le seul à décider de
+# ses propres conteneurs (règle de la pile).
+#
+# Ce qu'elle réutilise sans le dupliquer :
+#   - le réseau « yabiladi_app », créé par ../compose.yaml — Traefik n'est que
+#     sur celui-là, et il ne sera jamais question d'un second reverse proxy ;
+#   - le résolveur Let's Encrypt et l'entrée « websecure » déjà déclarés chez
+#     Traefik, à l'exclusion de tout réglage neuf ;
+#   - le fichier de comptes basicauth de Dagu, « /etc/traefik/htpasswd/user_yabiladi »,
+#     monté dans le conteneur Traefik par ../compose.yaml. Les middlewares
+#     déclarés ici ne lisent que ce fichier : ce qui ouvre dagu.yabiladi.com ouvre
+#     portainer.yabiladi.com et logs.yabiladi.com. Aucun mot de passe n'est écrit
+#     dans ce dépôt, et la source de vérité du compte reste le coffre
+#     (deploy/secrets/htpasswd_user_yabiladi.sops.bin) ;
+#   - la console de sauvegarde : le volume « yabiladi_portainer_data » est monté
+#     en lecture seule dans « dbackup » par ../compose.yaml, sous le job
+#     « portainer-volume-backup » de tools/backup/jobs.json.
+#
+# Ce qu'elle ajoute : un réseau privé « yabiladi_admin_internal » (internal: true,
+# donc sans aucune route vers l'extérieur) qui sépare Dozzle du mandataire de
+# socket. Le socket Docker n'est jamais atteignable depuis « yabiladi_app ».
+#
+# Trois conteneurs, aucune base de données, aucun agent : l'état de Portainer
+# tient dans un volume nommé, sauvegardé chaque nuit.
+# ============================================================================
+
+# Rotation des journaux locaux du driver json-file : mêmes plafonds que la pile
+# (x-docker-logs dans ../compose.yaml, que ce fichier ne peut pas importer — une
+# ancre est locale à son document). Sans plafond, un conteneur bavard écrit
+# jusqu'à saturer le disque ; ici « dozzle » peut être justement ce conteneur-là,
+# puisque c'est lui qui lit les journaux des autres.
+x-docker-logs: &docker-logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Le socket Docker, et qui y a droit.
+  # ---------------------------------------------------------------------------
+  # Mandataire en avant du socket pour Dozzle seul.
+  #
+  # Pourquoi ce conteneur existe : monter /var/run/docker.sock en « :ro » ne
+  # restreint RIEN du tout — le mode du fichier ne concerne que la création
+  # d'objets, et n'importe quel verbe de l'API passe par la même écriture sur la
+  # socket. Une fois la main sur le socket, on crée un conteneur privilégié monté
+  # sur « / » : c'est la racine de l'hôte, pas une lecture de journaux. L'énoncé
+  # « Dozzle ne doit pas disposer de capacités d'administration Docker » ne se
+  # tient donc qu'avec un filtre sur ce que l'API accepte.
+  #
+  # Ce que le filtre rend réellement (config produite par l'image, relue le
+  # 2026-11-12) : « http-request deny unless METH_GET » d'abord — POST=0 écarte
+  # création, démarrage, arrêt, suppression, exec ; la liste blanche de chemins
+  # ensuite, qui n'ouvre que ce que l'interface de Dozzle demande.
+  #
+  # « internal: true » sur son réseau : le mandataire n'a pas de route sortante,
+  # et « yabiladi_app » ne l'atteint pas — lui aussi est monté sur le socket.
+  docker-socket-proxy:
+    # Version épinglée comme partout dans le dépôt : « latest » ferait évoluer la
+    # liste des chemins autorisés sans que personne ne l'ait décidé.
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    # Ni « user: » ni « cap_drop: ALL » ici ne pourrait lire la socket : sur
+    # l'hôte elle est « root:docker 0660 » (mesuré sur le poste, et le groupe
+    # change de machine en machine), et l'image haproxy ne change pas
+    # d'utilisateur. Le durcissement passe donc par ce qu'il refuse à l'API, son
+    # réseau privé et son système de fichiers racine en lecture seule.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      # Trois chemins, et rien d'autre : le fichier d'état et le pidfile que
+      # haproxy s'écrit à lui-même, plus « /tmp » que l'entrée de l'image utilise.
+      - /run
+      - /var/lib/haproxy
+      - /tmp
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      SOCKET_PATH: /var/run/docker.sock
+      # Exactement les six groupes que Dozzle consulte, tous les autres restent
+      # au « 0 » livré par l'image (EXEC, BUILD, COMMIT, CONFIGS, DISTRIBUTION,
+      # NETWORKS, VOLUMES, SECRETS, SERVICES, SESSION, PLUGINS, NODES, SWARM,
+      # SYSTEM, TASKS, GRPC, AUTH).
+      PING: "1"          # /_ping — la sonde de santé de ce fichier
+      VERSION: "1"       # /version — l'interface affiche la version du moteur
+      INFO: "1"          # /info — le nom et les pilotes de stockage du nœud
+      CONTAINERS: "1"    # /containers… — la liste, l'inspection et /logs (GET)
+      IMAGES: "1"        # /images — le nom du visuel derrière chaque ligne
+      EVENTS: "1"        # /events — la liste se rafraîchit sans sondage
+      # Défense en profondeur : ces trois-là valent déjà « 0 » dans l'image, et
+      # « POST: 0 » les couvre tous. Écrits ici, ils se lisent, et un changement
+      # de défaut d'une version à l'autre ne passera pas inaperçu.
+      POST: "0"
+      ALLOW_START: "0"
+      ALLOW_STOP: "0"
+      ALLOW_RESTARTS: "0"
+      LOG_LEVEL: warning
+    networks:
+      - admin_internal
+    healthcheck:
+      # La socket n'est pas le seul chemin qui répond : « /_ping » est autorisé
+      # ci-dessus, et c'est bien la chaîne « OK » que le mandataire rend.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:2375/_ping | grep -q OK"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          # 48M et non 32M, mesuré : HAProxy tenait 21,76 MiB à vide (68 % de la
+          # réserve) alors que Dozzle garde le flux « /events » ouvert en
+          # permanence — un mandataire tué par l'OOM rend Dozzle muet sans que
+          # rien, côté navigateur, n'explique le silence. 48M laisse la place au
+          # flux sans être une deuxième base de données.
+          memory: 48M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Portainer CE — l'administration.
+  # ---------------------------------------------------------------------------
+  # Composant hautement privilégié par nature : il tient le socket Docker en
+  # écriture, donc il peut tout de l'hôte. Ce qui le protège n'est pas dans ce
+  # fichier, c'est la chaîne complète : aucun port publié, TLS du résolveur
+  # existant, et le compte basicauth de Dagu devant chaque requête. L'interface
+  # elle-même garde sa propre authentification (compte administrateur à créer à
+  # la première visite) : une fuite du fichier de comptes ne suffit pas à entrer.
+  #
+  # L'image « -alpine » plutôt que le défaut : à partir de 2.45 la variante
+  # standard est sans shell, donc sans sonde de santé possible et sans moyen
+  # d'ouvrir les droits du volume pour la console de sauvegarde. C'est le même
+  # Portainer, avec busybox.
+  portainer:
+    # Le tag passe par une variable pour que scripts/rollback.sh puisse
+    # rétrograder sans réécrire ce fichier : ADMIN_PORTAINER_IMAGE, défini dans
+    # docker-admin/.env.local (ignoré par git), reprend la valeur précédente.
+    image: ${ADMIN_PORTAINER_IMAGE:-portainer/portainer-ce:2.45.3-alpine}
+    command:
+      # -H explicite : c'est l'environnement local que l'interface doit découvrir,
+      # et rien d'autre — aucun agent, aucune URL distante.
+      - --host
+      - unix:///var/run/docker.sock
+      - --bind
+      - ":9000"
+      - --data
+      - /data
+    volumes:
+      # Écriture obligatoire, contrairement au mandataire : administrer Docker
+      # passe par les verbes POST de l'API. C'est le seul conteneur de la pile,
+      # avec Traefik, à tenir la socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Les données persistantes : l'environnement déclaré, le compte
+      # administrateur, les stacks sauvegardées, la base Bolt. Sauvegardées par
+      # le job « portainer-volume-backup » (voir docs/backup-restore.md).
+      - portainer_data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # CHOWN et FOWNER, et rien de plus : la sauvegarde passe par le groupe 33 de
+    # la console, donc quelqu'un doit pouvoir changer le groupe et le mode des
+    # fichiers que Portainer écrit en 0600 (mesuré : « cap_drop: ALL » seul fait
+    # échouer « chgrp -R 33 /data » du script, et le job du soir n'archiverait
+    # que des dossiers vides en le disant à peine). Ces deux capacités ne
+    # permettent ni d'écouter un port privilégié, ni de charger un module, ni de
+    # touching à la socket d'un autre conteneur.
+    cap_add:
+      - CHOWN
+      - FOWNER
+    networks:
+      - app
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.yabiladi.com`)"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls=true"
+      # La vérité du serveur, posée une fois pour toutes dans le fichier
+      # versionné ; le poste de développement vide ce label dans
+      # compose.override.yaml, comme pour grafana, dbackup et le tableau de bord
+      # de Traefik, et retombe sur le certificat auto-signé de dynamic.yml.
+      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.portainer.middlewares=portainer-ipallow,portainer-htpasswd"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+      # Le même fichier de comptes que Dagu, Grafana, la console de sauvegarde et
+      # le tableau de bord Traefik : mêmes identifiants, pas de second système.
+      # Le nom du middleware, lui, est propre à ce routeur — deux middlewares
+      # homonymes déclarés par deux conteneurs différents se disputent chez
+      # Traefik. « removeheader » reprend le réglage des autres : l'en-tête
+      # Authorization ne descend pas jusqu'à l'application.
+      - "traefik.http.middlewares.portainer-htpasswd.basicauth.usersfile=/etc/traefik/htpasswd/user_yabiladi"
+      - "traefik.http.middlewares.portainer-htpasswd.basicauth.removeheader=true"
+      # La barrière d'adresses, la même source unique que pour Dagu, Grafana et le
+      # tableau de bord Traefik : « DAGU_ALLOWED_IPS », boucle locale et réseaux
+      # privés par défaut. Ce n'est pas un déguisement du compte — c'est la règle
+      # de la maison pour TOUTE interface d'administration, et elle tombe ici sur
+      # le conteneur qui tient la socket Docker en écriture. Quiconque ouvre
+      # Grafana aujourd'hui ouvre donc Portainer ; qui est hors de ces plages
+      # n'obtient pas 401 mais 404, et n'apprend pas qu'une console écoute là.
+      - "traefik.http.middlewares.portainer-ipallow.ipallowlist.sourceRange=${DAGU_ALLOWED_IPS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+    healthcheck:
+      # La racine « / » est le seul témoin de vie qui marche dans les DEUX états
+      # de l'instance (mesuré sur 2.45.3) : 200 quand la fenêtre de création de
+      # l'administrateur est ouverte, 307 quand elle a expiré. « /api/ping », que
+      # la documentation cite, répond 404 sur cette version, et « /api/* » passe
+      # à 303 dès l'expiration — une sonde sur ces chemins marquerait le service
+      # mort alors qu'il sert l'interface. Busybox « wget » sort en erreur sur une
+      # redirection, d'où le statut lu dans « -S » (stderr) plutôt que le code de
+      # sortie : 2xx et 3xx sont tous deux « vivant ».
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://127.0.0.1:9000/ 2>&1 | grep -qE 'HTTP/1.[01] [23]' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+    logging: *docker-logs
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Dozzle — les journaux.
+  # ---------------------------------------------------------------------------
+  # Consultation seule, et c'est écrit dans ses réglages autant que dans le
+  # mandataire : « --enable-actions » et « --enable-shell » ne sont PAS passés
+  # (défaut « false »), donc l'interface n'a ni bouton d'arrêt ni terminal ;
+  # « --auto-update » et « --auto-cleanup » sont éteints explicitement — une
+  # interface de lecture qui se mettrait à purger les images et à redéployer des
+  # conteneurs sur un rythme quotidien serait la pire des surprises.
+  #
+  # La pile de mesure existante n'est pas remplacée : Alloy pousse déjà les
+  # journaux dans Loki et Grafana les interroge sur 30 jours. Dozzle répond à
+  # une autre question — « que dit ce conteneur, maintenant ? » — sans base de
+  # stockage, sans index et sans rétention propre : il lit les fichiers du
+  # driver json-file au moment où on les ouvre.
+  dozzle:
+    image: ${ADMIN_DOZZLE_IMAGE:-amir20/dozzle:v11.4.2-alpine}
+    # Variante « -alpine » pour la même raison que Portainer : l'image par défaut
+    # est sans shell, et son binaire sert pourtant de sonde de santé.
+    command:
+      - --addr
+      - ":8080"
+      - --level
+      - info
+      - --no-analytics
+      # Rien qui sonde l'extérieur au démarrage : la pile a déjà son tableau de
+      # bord, et un poste de développement n'a pas à appeler GitHub.
+      - --release-check-mode
+      - manual
+      - --image-check-mode
+      - off
+      - --disable-setup-wizard
+      # Éteints, et écrits comme tels : ce sont les deux réglages qui feraient de
+      # Dozzle un outil d'administration, ce que le mandataire refuse déjà.
+      - --auto-update
+      - "off"
+      - --auto-cleanup
+      - "off"
+    environment:
+      # Le mandataire, jamais la socket. Le nom de service vient du DNS interne
+      # du réseau « admin_internal », que les deux conteneurs partagent ; le
+      # format « tcp:// » est lu par le client Docker standard (mesuré : une
+      # adresse injoignable fait refuser le démarrage, celle du mandataire rend
+      # bien la liste des conteneurs).
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      TZ: ${ADMIN_TZ:-Europe/Paris}
+    depends_on:
+      # Le mandataire doit être en bonne santé, pas seulement démarré : Dozzle
+      # meurt « Could not connect to any Docker Engine » s'il interroge la socket
+      # pendant qu'HAProxy se lève (mesuré au premier déploiement — deux lignes
+      # « fatal » avant la connexion réussie).
+      docker-socket-proxy:
+        condition: service_healthy
+    networks:
+      - app
+      - admin_internal
+    security_opt:
+      - no-new-privileges:true
+    # « cap_drop: ALL » plus bas plutôt qu'un « user: » : Dozzle ne bind que
+    # 8080 et n'écrit rien, mais l'image attend un uid connu de sa propre base.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    labels:
+      - "traefik.enable=true"
+      # Deux réseaux : « Traefik doit savoir lequel interroger », sinon il choisit
+      # la première adresse venue — et l'adresse du réseau privé ne lui répond
+      # pas. C'est le label que posent déjà les conteneurs du site dans le même
+      # cas.
+      - "traefik.docker.network=yabiladi_app"
+      - "traefik.http.routers.dozzle.rule=Host(`logs.yabiladi.com`)"
+      - "traefik.http.routers.dozzle.entrypoints=websecure"
+      - "traefik.http.routers.dozzle.tls=true"
+      - "traefik.http.routers.dozzle.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dozzle.middlewares=dozzle-ipallow,dozzle-htpasswd"
+      - "traefik.http.services.dozzle.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.dozzle-htpasswd.basicauth.usersfile=/etc/traefik/htpasswd/user_yabiladi"
+      - "traefik.http.middlewares.dozzle-htpasswd.basicauth.removeheader=true"
+      # Même règle que pour Portainer et pour les quatre consoles déjà en place :
+      # le compte ne se présente qu'après avoir franchi la plage d'adresses. Les
+      # journaux en clair — lignes de commande, jetons, adresses des visiteurs —
+      # ne méritent pas une porte plus large que l'inventaire d'hôte.
+      - "traefik.http.middlewares.dozzle-ipallow.ipallowlist.sourceRange=${DAGU_ALLOWED_IPS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+    healthcheck:
+      # La sous-commande « healthcheck » du binaire : elle interroge le serveur
+      # local et sort en erreur s'il ne répond pas — plus fidèle qu'un curl sur « / ».
+      test: ["CMD", "/dozzle", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          # 128 Mio pour environ 40 Mio mesurés : la lecture d'un gros fichier de
+          # journal se fait par tampon, mais une requête multi-conteneurs en
+          # simultané les garde ouverts.
+          cpus: "0.25"
+          memory: 128M
+    logging: *docker-logs
+    restart: unless-stopped
+
+# ---------------------------------------------------------------------------
+# Volumes et réseaux.
+#
+# « external: true » pour le volume de Portainer et pour « yabiladi_app » : la
+# stack refuse de démarrer sur un objet qu'elle n'a pas trouvé, plutôt que d'en
+# créer un neuf et vide. « scripts/deploy.sh » pose le volume avant le premier
+# « up -d » (et ../deploy.sh le pose aussi, car « dbackup » le monte) — un poste
+# vierge se règle donc par un déploiement, pas par une copie à la main.
+# ---------------------------------------------------------------------------
+volumes:
+  # Nom physique figé : le jour où cette stack déménage de dépôt, les données de
+  # Portainer suivent sans recopie, et la console de sauvegarde continue de lire
+  # le volume qu'elle croit connaître.
+  portainer_data:
+    external: true
+    name: yabiladi_portainer_data
+
+networks:
+  app:
+    external: true
+    name: yabiladi_app
+  # Réseau privé de la stack. « internal: true » coupe toute route sortante :
+  # ni le mandataire ni Dozzle ne peuvent joindre Internet, et Internet ne peut
+  # pas les joindre. Traefik n'y est pas — c'est ce qui garantit qu'aucun port
+  # d'administration n'est exposé, même par erreur de label.
+  admin_internal:
+    name: yabiladi_admin_internal
+    internal: true

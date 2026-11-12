@@ -1,0 +1,28 @@
+# Modèle du fichier de calibrage propre à une machine — pile docker-admin.
+#
+# À copier en « docker-admin/compose.override.yaml » (ignoré par git). Un
+# serveur Debian n'a rien à copier ici : ses valeurs sont déjà dans
+# compose.yaml et dans le « .env » versionné.
+#
+# Une seule chose se règle ici, pour la même raison que dans le
+# compose.override.yaml.example de la racine : Let's Encrypt ne peut valider
+# aucun nom depuis un poste de développement (les noms publics pointent sur le
+# serveur), donc le resolver se VIDÉ et le certificat auto-signé de
+# docker/traefik/dynamic.yml reprend la main. Le poste doit en plus connaître
+# les deux noms dans son fichier hosts — sinon rien n'atteint Traefik.
+#
+# Les scripts de scripts/ chargent ce fichier automatiquement s'il existe : «
+# docker compose » ne le fait pas tout seul dès qu'on nomme les fichiers avec
+# « -f » (mesuré sur v5.6.1).
+
+services:
+
+  portainer:
+    labels:
+      # Valeur VIDÉE, pas supprimée : supprimer laisserait le label du fichier
+      # versionné intact, et Compose ne remplace pas un label par son absence.
+      - "traefik.http.routers.portainer.tls.certresolver="
+
+  dozzle:
+    labels:
+      - "traefik.http.routers.dozzle.tls.certresolver="

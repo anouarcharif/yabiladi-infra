@@ -252,8 +252,14 @@ ensure_networks() {
 # jamais touché : la liste est exhaustive, pas destructive.
 ensure_volumes() {
     local vol
+    # « yabiladi_portainer_data » appartient à la pile docker-admin, mais CE
+    # projet le monte en lecture seule pour le job « portainer-volume-backup » :
+    # absent, « docker compose up -d » échouerait sur le montage de dbackup, pas
+    # sur le projet voisin. Le créer ici ne touche aucune donnée — la commande
+    # ne fait rien quand le volume existe déjà.
     for vol in yabiladi_postfix_spool yabiladi_traefik_acme yabiladi_geoip_data \
-               yabiladi_dbackup_data yabiladi_dbackup_tmp yabiladi_alloy_data; do
+               yabiladi_dbackup_data yabiladi_dbackup_tmp yabiladi_alloy_data \
+               yabiladi_portainer_data; do
         docker volume inspect "$vol" >/dev/null 2>&1 && continue
         log "     création du volume $vol (absent — les quatre projets le déclarent « external »)"
         docker volume create "$vol" >/dev/null \

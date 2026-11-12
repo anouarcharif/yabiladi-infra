@@ -33,6 +33,9 @@
 # disques de rétention, labels « tls.certresolver » vidés. Modèle versionné :
 # compose.override.yaml.example.
 /compose.override.yaml
+# Le même mécanisme pour la pile docker-admin (réserves CPU/RAM d'un poste,
+# labels « tls.certresolver » vidés) — modèle : docker-admin/compose.override.yaml.example.
+/docker-admin/compose.override.yaml
 ###< accès local aux consoles ###
 
 ###> clés internes de la console de sauvegarde ###

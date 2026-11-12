@@ -8,5 +8,6 @@
   {"name":"Fichiers - facturation-uploads","path":"facturation/public/uploads","label":"pièces jointes de l'intranet (public/uploads)","schedule":"24 4 * * *"},
   {"name":"Fichiers - facturation-bc","path":"facturation/var/bc_files","label":"bons de commande de l'intranet (var/bc_files)","schedule":"28 4 * * *"},
   {"name":"Fichiers - mariadb-physical","path":"mariadb-backups","label":"backups physiques MariaDB (mariabackup, 60GB → ~15GB compressés)","schedule":"32 4 * * *","enabled":false},
-  {"name":"Fichiers - radio-content","path":"radio-content","label":"discothèque des antennes (data/radio_content)","schedule":"36 4 * * 0"}
+  {"name":"Fichiers - radio-content","path":"radio-content","label":"discothèque des antennes (data/radio_content)","schedule":"36 4 * * 0"},
+  {"name":"portainer-volume-backup","path":"portainer","label":"Sauvegarde quotidienne des données persistantes de Portainer CE.","schedule":"40 4 * * *"}
 ]

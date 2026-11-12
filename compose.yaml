@@ -480,6 +480,15 @@ services:
       # Même variable que les trois services, donc la cible est exactement l'arbre
       # que Grafana écrit, jamais un second chemin à tenir à jour.
       - ${LOGGING_HOST_DATA_PATH:-/data/logging}/grafana:/backup/grafana:ro
+      # Données persistantes de Portainer CE (pile docker-admin, projet Compose
+      # distinct). Un volume nommé, comme « traefik_acme » juste au-dessus : la
+      # console ne peut PAS lire la socket Docker — elle tourne en uid 1001 et le
+      # connecteur « docker-volume » de DBackup meurt en EACCES (mesuré) — donc
+      # c'est le volume lui-même qui se monte, en lecture seule, sous le nom du
+      # job. Les droits d'ouverture (groupe 33 sur /data) se posent par
+      # docker-admin/scripts/backup.sh --grant-only, geste du « open_acme_to_backup
+      # » ci-dessous appliqué à la donnée de l'autre pile.
+      - portainer_data:/backup/portainer:ro
     ports:
       - "127.0.0.1:${DBACKUP_HTTP_PORT:-8087}:3000"
     healthcheck:
@@ -1067,6 +1076,14 @@ volumes:
   alloy_data:
     external: true
     name: yabiladi_alloy_data
+  # Volume de la pile docker-admin (portainer/portainer_data). Il est écrit par
+  # l'autre projet, monté ici en lecture seule pour le job
+  # « portainer-volume-backup », et déclaré « external » des deux côtés : c'est
+  # le seul moyen de partager une donnée entre deux projets Compose sans que la
+  # destruction de l'un emporte le volume de l'autre.
+  portainer_data:
+    external: true
+    name: yabiladi_portainer_data
 
 # Réseau interne de la centralisation : Alloy -> Loki et Grafana -> Loki y
 # circulent sans jamais toucher « app », et donc sans jamais toucher l'hôte.
