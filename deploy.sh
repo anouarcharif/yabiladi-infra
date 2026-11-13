@@ -572,20 +572,44 @@ deploy_admin_console() {
 # restauration d'une archive), il le pose en 0600 root:root. Le TLS n'est pas cassé,
 # mais la console ne lit plus le fichier et le job se dit partiel — ce geste le
 # remet à son propriétaire au déploiement suivant, et le contrôle ci-dessous le dit.
+#
+# Le résolveur ne se construit qu'au démarrage de Traefik : corriger le mode d'une
+# instance déjà partie ne la rend pas Let's Encrypt pour autant. Le geste se joue
+# donc APRÈS le « up -d » du déploiement — un magasin laissé en 0640 par l'ancien
+# réglage ferait démarrer le résolveur refusé — et redémarre Traefik quand le mode
+# d'avant était refusé. Mesuré ici : la bascule « 640 → 600 » fait taire les deux
+# lignes d'erreur au boot suivant, et rien ne disparaît sans ce redémarrage.
+acme_permissions() {
+    # busybox « stat -c » est là dans l'image alpine de Traefik (vérifié), et son
+    # code de sortie dit si le fichier existe.
+    docker compose exec -T --user root traefik sh -c \
+        'stat -c "%a %u:%g" /letsencrypt/acme.json' 2>/dev/null || true
+}
+
 open_acme_to_backup() {
-    local droits
+    local avant apres
+    avant="$(acme_permissions)"
+
     docker compose exec -T --user root traefik sh -c \
         'chown 1001:33 /letsencrypt/acme.json 2>/dev/null; chmod 0600 /letsencrypt/acme.json 2>/dev/null; true' \
         >/dev/null 2>&1 \
         || { log "     acme.json non rendu lisible (Traefik arrêté ?) : le job de sauvegarde le signalera"; return 0; }
 
-    # « 600 » seulement : un « 400 » serait refusé à Traefik, qui doit écrire.
-    # busybox « stat -c » est là dans l'image alpine de Traefik (vérifié).
-    droits="$(docker compose exec -T --user root traefik sh -c 'stat -c "%a %u:%g" /letsencrypt/acme.json' 2>/dev/null || true)"
-    case "$droits" in
-        600\ *1001:33) log "     acme.json en 0600 1001:33 : Let's Encrypt actif et console en mesure de l'archiver" ;;
-        '')            log "     acme.json introuvable dans le volume : rien à ouvrir (Traefik n'a pas encore de magasin)" ;;
-        *)             log "     ATTENTION : acme.json en $droits — Traefik exige 0600 et retirerait le résolveur Let's Encrypt ; la console, elle, ne lit qu'en 1001:33" ;;
+    apres="$(acme_permissions)"
+    case "$apres" in
+        # « 600 » seulement : un « 400 » serait refusé à Traefik, qui doit écrire.
+        600\ 1001:33) log "     acme.json en 0600 1001:33 : Let's Encrypt admis et console en mesure de l'archiver" ;;
+        '')           log "     acme.json introuvable dans le volume : rien à ouvrir (Traefik n'a pas encore de magasin)" ;;
+        *)            log "     ATTENTION : acme.json en « $apres » — Traefik exige 0600 et retirerait le résolveur ; la console, elle, ne lit qu'en 1001:33" ;;
+    esac
+
+    case "$avant" in
+        600\ * | 400\ * | '') : ;;
+        *)
+            log "     magasin laissé en « $avant » au dernier démarrage : résolveur Let's Encrypt écarté, redémarrage de Traefik"
+            docker compose restart traefik >/dev/null 2>&1 \
+                || log "     ATTENTION : Traefik n'a pas redémarré — rejouer « docker compose restart traefik », sinon les certificats ne se renouvelleront pas"
+            ;;
     esac
 }
 
