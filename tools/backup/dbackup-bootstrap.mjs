@@ -242,6 +242,12 @@ const EXCLUDES = [
   // acme, mediakit, facturation, mariabackup, discothèque radio) ont été fouillés
   // le même jour, aucun ne contient de dossier « plugins ».
   "**/plugins/**",
+  // Index de recherche unifiée que Grafana construit lui-même (bleve) : 4 fichiers
+  // mesurés le 2026-11-13, tous en « 472:472 » mode « 0600 ». Le PGID 33 du
+  // conteneur n'y change rien — le mode refuse la lecture au groupe comme aux
+  // autres uid — et Grafana recrée l'arbre à chaque démarrage : rien à archiver.
+  // Sans ce motif, le job rendait « Partial » chaque nuit sur ces 4 fichiers.
+  "**/unified-search/**",
   // Journaux legacy gonflés par des cron V1 toujours actifs. Pas de « *.log » en
   // bloc : ces six motifs sont nommés un par un, et une règle globale écarterait
   // sans le dire n'importe quel journal tombé dans un dossier média. (« var/log »
