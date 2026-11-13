@@ -97,13 +97,20 @@ conteneur() { # $1 service → identifiant, vide si absent
 # redémarrage du proxy, hors périmètre). Sur le serveur, c'est Let's Encrypt ;
 # « -k » n'y change rien au verdict, seul le chemin du compte importe ici.
 code_http() { # $1 méthode, $2 hôte, reste = options curl
-    local methode="$1" hote="$2"
+    local methode="$1" hote="$2" sortie
     shift 2
-    curl -k -sS -o "$DEVNULL" -w '%{http_code}' -X "$methode" \
+    # La valeur se relève puis se teste, au lieu d'un « || printf 000 » : « -w »
+    # écrit déjà « 000 » quand la requête part en échec, et curl sort alors en
+    # non nul — le repli collait un second « 000 » derrière, et le « 000000 » qui
+    # en sortait ne correspondait plus à rien de ce que le contrôle sait lire
+    # (mesuré sur la ligne « www », où le diagnostic croisé avec nginx ne se
+    # jouait jamais). Le trou noir, lui, se nomme plus haut selon le système.
+    sortie="$(curl -k -sS -o "$DEVNULL" -w '%{http_code}' -X "$methode" \
         --connect-timeout 6 --max-time 15 \
         --resolve "${hote}:443:${EDGE_TARGET}" \
         --resolve "${hote}:80:${EDGE_TARGET}" \
-        "$@" "https://${hote}/" 2>/dev/null || printf '000'
+        "$@" "https://${hote}/" 2>/dev/null)" || true
+    printf '%s' "${sortie:-000}"
 }
 # Busybox « wget » suit les redirections : la première ligne « HTTP/1.1 … » est
 # donc celle du service lui-même, ce qui distingue 200 (fenêtre ouverte) de 307
@@ -155,6 +162,16 @@ else
     no "volume « yabiladi_portainer_data » absent — « bash docker-admin/scripts/deploy.sh »"
 fi
 
+# Le jour de la mise en production, un seul « ./deploy.sh » doit poser toute la
+# machine. Cette ligne est le seul endroit où vérifier que la console n'a pas
+# été oubliée du geste — l'inverse d'une consigne qu'on croit acquise.
+if grep -q '^[[:space:]]*deploy_admin_console$' "$REPO_DIR/deploy.sh" 2>/dev/null \
+   && grep -q 'bash docker-admin/scripts/deploy.sh' "$REPO_DIR/deploy.sh" 2>/dev/null; then
+    ok "../deploy.sh enchaîne bien docker-admin/scripts/deploy.sh (fonction « deploy_admin_console » appelée)"
+else
+    no "../deploy.sh n'appelle pas cette pile — la console d'administration ne partira pas avec l'infrastructure"
+fi
+
 # --- 2. Conteneurs -----------------------------------------------------------
 
 titre "Conteneurs de la stack"
@@ -198,6 +215,50 @@ for s in "${SERVICES[@]}"; do
             ;;
     esac
 done
+
+# --- 2 bis. Le service se donne-t-il les droits lui-même ? -------------------
+# La console de sauvegarde lit en uid 1001 / groupe 33 ; Portainer écrit ses
+# fichiers en 0600 root:root. Sans passe de droits, le job du soir archive zéro
+# fichier et dit « Success » (mesuré). La correction vit donc dans l'entrypoint
+# du service : elle se rejoue à chaque démarrage, sans planificateur.
+
+cid="$(conteneur portainer)"
+if [ -n "$cid" ]; then
+    caps="$(docker inspect -f '{{.HostConfig.CapAdd}}' "$cid")"
+    case "$caps" in
+        # Mesuré : le « chmod 2750 » de busybox échoue sans bruit et laisse 750
+        # quand CAP_FSETID manque — code de sortie 0, bit setgid absent. D'où
+        # cette ligne, qui ne se contente pas de lire le mode appliqué.
+        *CAP_FSETID*) ok "portainer : CAP_FSETID au catalogue — le bit setgid peut être posé" ;;
+        *) no "portainer : CAP_FSETID absent ($caps) — les dossiers resteront en 750, la console ne lira pas les fichiers nés à l'exécution" ;;
+    esac
+
+    umask1="$(docker exec "$cid" sh -c 'sed -n "s/^Umask:[[:space:]]*//p" /proc/1/status' 2>/dev/null | tail -1 | tr -d '[:space:]')"
+    [ "$umask1" = "0027" ] \
+        && ok "portainer : umask 0027 sur le PID 1 — un fichier créé à l'exécution naît groupe 33 / 0640" \
+        || no "portainer : umask du PID 1 = « ${umask1:-inconnue} » (attendu 0027) — les fichiers créés après le démarrage resteront hors de portée du job"
+
+    # L'entrypoint enveloppe le binaire : si la transmission des arguments
+    # cassait, le service tournerait sans « --data /data » et sans le dire.
+    argv="$(docker exec "$cid" sh -c 'tr "\0" " " < /proc/1/cmdline' 2>/dev/null | tr -s '[:space:]' ' ')"
+    case "$argv" in
+        */portainer*--data\ /data*) ok "portainer : arguments d'origine intacts derrière l'enveloppe (« $(printf '%s' "$argv" | sed 's/ *$//') »)" ;;
+        *) no "portainer : PID 1 ne tient pas « /portainer … --data /data » (« ${argv:-vide} ») — l'enveloppe de l'entrypoint avale la ligne de commande" ;;
+    esac
+
+    # L'état posé sur le volume, pas l'intention déclarée : trois compteurs de
+    # dérive, tous à zéro tant que la passe a eu lieu.
+    derive="$(docker exec "$cid" sh -c '
+        d=$(find /data -type d ! -perm -2000 2>/dev/null | wc -l)
+        g=$(find /data -type f ! -group 33 2>/dev/null | wc -l)
+        r=$(find /data -type f ! -perm -g=r 2>/dev/null | wc -l)
+        printf "%s/%s/%s" "$d" "$g" "$r"' 2>/dev/null | tail -1)"
+    case "$derive" in
+        0/0/0) ok "portainer : aucun écart de droits sur /data (dossiers setgid / fichiers groupe 33 / fichiers lisibles par le groupe)" ;;
+        "") no "portainer : pas pu lire les droits de /data dans le conteneur" ;;
+        *) no "portainer : dérive de droits sur /data — $derive (dossiers sans setgid / fichiers hors groupe 33 / fichiers non lisibles en groupe). Un « docker compose restart portainer » la résorbe à lui seul" ;;
+    esac
+fi
 
 cid="$(conteneur docker-socket-proxy)"
 if [ -n "$cid" ]; then

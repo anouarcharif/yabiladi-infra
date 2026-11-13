@@ -1,11 +1,14 @@
 # Yabiladi-Infra
 
 Infrastructure commune de la pile : Traefik, Postfix, geoipupdate, DBackup,
-Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor. Se déploie en premier
-(`git pull` puis `./deploy.sh`), chaque projet — site, facturation, médiakit —
-tenant ensuite ses propres conteneurs avec son propre script. Ordre complet,
-chemins attendus sur la machine et migration des volumes et réseaux existants :
-[MIGRATION.md](../MIGRATION.md).
+Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor, et la console
+d'administration Docker sous `docker-admin/` (Portainer, Dozzle, leur mandataire
+de socket). Se déploie en premier (`git pull` puis `./deploy.sh`), chaque projet —
+site, facturation, médiakit — tenant ensuite ses propres conteneurs avec son
+propre script. `./deploy.sh` enchaîne d'ailleurs `docker-admin/scripts/deploy.sh`
+en bout de parcours : une seule commande amène la machine, et la console reste
+jouable seule. Ordre complet, chemins attendus sur la machine et migration des
+volumes et réseaux existants : [MIGRATION.md](../MIGRATION.md).
 
 ## L'adresse du visiteur arrive jusqu'ici
 

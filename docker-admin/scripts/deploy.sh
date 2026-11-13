@@ -19,9 +19,11 @@ set -euo pipefail
 #   - l'ouverture des droits du volume pour le groupe 33 de la console de
 #     sauvegarde, depuis LE PROPRE CONTENEUR DE PORTAINER : sans elle, chaque
 #     nuit, le job « portainer-volume-backup » sauterait la base Bolt en 0600 et
-#     se dirait « partiel ». Même geste que « open_acme_to_backup » et
-#     « open_grafana_data_to_backup » dans ../deploy.sh, sur la donnée de cette
-#     stack.
+#     se dirait « Success » avec zéro fichier (mesuré). Le service se fait déjà
+#     ce geste à chaque démarrage par son « entrypoint » ; cette passe-ci est le
+#     filet, et c'est elle qui couvre un volume repris d'ailleurs. Même geste que
+#     « open_acme_to_backup » et « open_grafana_data_to_backup » dans
+#     ../deploy.sh, sur la donnée de cette stack.
 #
 # Traefik n'a pas besoin d'un redémarrage : son fournisseur Docker écoute les
 # évènements, un routeur déclaré par un conteneur qui démarre apparaît à la

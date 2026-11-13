@@ -24,6 +24,12 @@ d'équivalent, moteur 29.9.2) :
 | `dozzle` | 128M / 0.25 | 12.9 → 14.7 Mio | **0.07 % au calme, 25 % sous chasse d'évènements** |
 | **total** | 560M / 0.85 | **≈ 55 Mio, soit ~0,7 % des 8 Go** | — |
 
+Le jeu final de `validate.sh --resources`, le 2026-11-12 au soir, rend le même
+ordre de grandeur avec la charge d'évènements qui tournait encore : `portainer`
+18,69 Mio / 0,00 %, `docker-socket-proxy` 23,25 Mio / 0,71 %, `dozzle` 19,88 Mio /
+0,39 %, soit **≈ 62 Mio, ~0,8 % des 8 Go**. La dispersion d'un jeu à l'autre tient
+toute aux fichiers journaux que Dozzle relit, pas à un état qui grossirait.
+
 Le dernier chiffre mérite son explication, parce qu'il est le seul qui n'est pas
 négligeable. Dozzle tient le flux `/events` ouvert pour ne pas avoir à sonder. Sur
 une machine qui fait tourner des suites de tests, des sondes de santé toutes les
@@ -113,7 +119,13 @@ répertoire construit son `docker compose` avec `-f compose.yaml` explicite,
 restreint au projet.
 
 Un redémarrage de Portainer referme aussi sa fenêtre d'administrateur : cinq
-minutes, voir installation.md.
+minutes, voir installation.md. Il fait une autre chose, utile : son `entrypoint`
+repose les droits du volume (`2750` sur les dossiers, `0640 root:33` sur les
+fichiers, `umask 027` pour la suite). Un `docker compose restart portainer`
+suffit donc à résorber une dérive — joué pour de vrai, après en avoir semé une à
+la main, et le contrôle « aucun écart de droits sur /data » de `validate.sh` l'a
+confirmé. C'est aussi pour ça qu'aucune tâche planifiée ne tourne pour ça : voir
+`docs/backup-restore.md`.
 
 ## Ce que ces scripts ne feront jamais
 

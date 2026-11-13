@@ -19,8 +19,9 @@ pilote autre chose qu'elle-même.
 | `dozzle` | `amir20/dozzle:v11.4.2-alpine` | journaux temps réel | **aucune** — elle parle au mandataire |
 
 Les variantes `-alpine` sont un choix mesuré, pas un goût : à partir de 2.45,
-l'image standard de Portainer est sans shell, donc sans sonde de santé possible
-et sans moyen d'ouvrir les droits de son volume à la console de sauvegarde.
+l'image standard de Portainer est sans shell — donc sans sonde de santé possible,
+et sans moyen d'ouvrir les droits de son volume à la console de sauvegarde, ni à
+l'installation ni par son propre `entrypoint`.
 
 ## Où ça s'ouvre
 
@@ -43,7 +44,7 @@ sont exactement celles de Grafana, dans le même ordre.
 
 ```bash
 bash docker-admin/scripts/deploy.sh      # déployer ou mettre à jour CETTE pile, et elle seule
-bash docker-admin/scripts/validate.sh    # 68 contrôles, lecture seule, code de sortie qui dit vrai
+bash docker-admin/scripts/validate.sh    # 77 contrôles, lecture seule, code de sortie qui dit vrai
 bash docker-admin/scripts/backup.sh      # sauvegarder les données de Portainer maintenant, et le prouver
 bash docker-admin/scripts/rollback.sh --list   # versions en service et tags publiés, avant de rétrograder
 ```
@@ -51,6 +52,10 @@ bash docker-admin/scripts/rollback.sh --list   # versions en service et tags pub
 Chacun rend `--help`. Aucun ne fait `git pull`, aucun ne redémarre Traefik,
 aucun n'appelle `docker system prune`, aucun ne touche un conteneur d'un autre
 projet.
+
+`../deploy.sh` — celui de l'infrastructure — enchaîne le premier à la fin de son
+parcours : un seul geste le jour de la mise en production. Rien ici ne pilote
+l'inverse, et le script reste jouable seul.
 
 ## Sauvegarde
 

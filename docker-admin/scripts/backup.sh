@@ -13,12 +13,16 @@ set -euo pipefail
 # « yabiladi_portainer_data » en lecture seule sous « /backup/portainer », et
 # tools/backup/jobs.json qui déclare le job. Ce script ne fait que trois choses.
 #
-#  1. OUVRAIT LES DROITS. Portainer écrit en root, sa base « portainer.db » sort
-#     en 0600 root:root, et la console refuse de tourner en root : son
-#     utilisateur 1001, groupe 33 (PGID de ../compose.yaml) ne lirait rien. Le
-#     geste est fait DEPUIS le conteneur de Portainer — cette stack ne touche
-#     donc que sa propre donnée, jamais un dossier de l'hôte. Sans lui, le job
-#     du soir saute la seule pièce qui ne se rejoue pas.
+#  1. OUVRE LES DROITS — en rappel. Portainer écrit en root, sa base
+#     « portainer.db » sort en 0600 root:root, et la console refuse de tourner en
+#     root : son utilisateur 1001, groupe 33 (PGID de ../compose.yaml) ne lirait
+#     rien. Le geste est fait DEPUIS le conteneur de Portainer — cette stack ne
+#     touche donc que sa propre donnée, jamais un dossier de l'hôte. Il est déjà
+#     fait à chaque démarrage par l'« entrypoint » du service (avec « umask 027 »
+#     et les dossiers en « 2750 », pour que les fichiers nés en cours de route
+#     soient archivables à la minute) : cette passe-ci est le filet, pas le
+#     mécanisme. Sans lui, le job du soir saute la seule pièce qui ne se rejoue
+#     pas.
 #
 #  2. DÉCLENCHE le job, si on le lui demande. La passe de nuit est réglée dans
 #     la console (« 40 4 * * * », la dernière minute libre de la série) : ici,
@@ -55,7 +59,7 @@ for a in "$@"; do
         --grant-only) GRANT_ONLY=1 ;;
         --quiesce) QUIESCE=1 ;;
         --check) CHECK_ONLY=1 ;;
-        -h | --help) sed -n '4,34p' "$0"; exit 0 ;;
+        -h | --help) sed -n '4,43p' "$0"; exit 0 ;;
         *) printf 'ERREUR: option inconnue « %s »\n' "$a" >&2; exit 2 ;;
     esac
 done
@@ -99,10 +103,17 @@ ouvre_les_droits() {
     # « -type d » puis « -type f » plutôt qu'un « chmod -R g+rX » : le « X » de
     # GNU n'est pas garanti dans busybox, et un dossier sans bit d'exécution
     # devient invisible pour la console — qui ne le dit pas, elle archive moins.
+    #
+    # « 2750 », pas « 0750 » : le bit setgid est ce qui fait naître un fichier
+    # NOUVEAU (une stack rangée dans « compose/ ») dans le groupe 33, donc
+    # archivable dès la nuit suivante sans attendre un redémarrage. C'est le même
+    # réglage que dans « compose.yaml » (l'entrée de Portainer se met elle-même
+    # en état à chaque démarrage) ; écrit ici en 0750, il l'effacerait à chaque
+    # passe — les deux gestes doivent dire la même chose.
     docker exec --user root "$cid" sh -c '
         base=/data
         chgrp -R 33 "$base" 2>/dev/null || exit 1
-        find "$base" -type d -exec chmod 0750 {} + 2>/dev/null || exit 1
+        find "$base" -type d -exec chmod 2750 {} + 2>/dev/null || exit 1
         find "$base" -type f -exec chmod 0640 {} + 2>/dev/null || exit 1
         ls -ld "$base"' >/dev/null || { log "  · ouverture des droits refusée dans le conteneur"; return 1; }
 

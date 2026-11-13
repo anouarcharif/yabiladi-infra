@@ -51,6 +51,10 @@ Déploiement de l'infrastructure commune : Traefik, Postfix, geoipupdate,
 DBackup, Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor.
 
   ./deploy.sh                  pull + secrets + dossiers + up -d + contrôles infra
+                               — la console d'administration (docker-admin :
+                               Portainer, Dozzle, mandataire de socket) suit dans
+                               le même geste ; ses conteneurs restent pilotés par
+                               docker-admin/scripts/deploy.sh
   ./deploy.sh --build          idem, en rebuildant les images (docker/postfix,
                                docker/secrets modifiés)
   ./deploy.sh --secrets        re-matérialise seul les entrées du coffre dont la
@@ -502,6 +506,33 @@ bootstrap_backups() {
         || die "amorçage de la console de sauvegarde a échoué — « docker compose logs dbackup »"
 }
 
+# La console d'administration Docker (Portainer + Dozzle + son mandataire de
+# socket) est une pile à part du même dépôt : son propre « compose.yaml », ses
+# propres scripts, son propre cycle de vie — et son projet Compose, donc
+# « docker-admin/scripts/deploy.sh » reste seul maître de ses conteneurs.
+#
+# Ce qui est enchaîné ici est l'ordre du geste, pas la mainmise : le jour de la
+# mise en production, une seule commande doit amener toute l'infrastructure, et une
+# console oubliée est un trou de supervision qui ne se voit que quand on en a
+# besoin. Validé le 2026-11-12 par le propriétaire du projet, à la question
+# « rien à adapter le jour J ? ».
+#
+# Un échec ici ne défait rien de l'infrastructure : les conteneurs de ce projet
+# sont déjà en marche, les contrôles viennent de passer avant, et le message rend
+# la commande à rejouer seule.
+deploy_admin_console() {
+    local out status=0
+    [ -f docker-admin/scripts/deploy.sh ] \
+        || { log "     (docker-admin absent de ce dépôt : rien à enchaîner)"; return 0; }
+    log "     console d'administration Docker (docker-admin)…"
+    # « || status=$? » : sous « set -euo pipefail », un pipeline qui échoue tuerait
+    # le script avant que le message soit écrit. Le statut se relève, puis se dit.
+    out="$(bash docker-admin/scripts/deploy.sh 2>&1)" || status=$?
+    printf '%s\n' "$out" | sed 's/^/     /'
+    [ "$status" -eq 0 ] \
+        || die "console d'administration non déployée — l'infrastructure, elle, est posée. Rejouer seul : bash docker-admin/scripts/deploy.sh"
+}
+
 # Le magasin ACME (certificats Let's Encrypt) est écrit par Traefik en 0600
 # root:root dans le volume nommé traefik_acme, que la console monte en lecture
 # seule. L'image de sauvegarde refuse de tourner en root (mesuré : « Running as
@@ -828,6 +859,10 @@ case "$verbe" in
 
         log "5/5 Contrôles…"
         checks_infra
+        # Après les contrôles, donc : la console est le dernier venu et son échec
+        # ne doit faire l'impasse ni sur le restart d'Alloy ni sur l'état de
+        # l'infrastructure, qui s'affiche quel que soit son sort à elle.
+        deploy_admin_console
         ;;
 
     *)

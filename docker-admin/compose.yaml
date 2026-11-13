@@ -152,7 +152,43 @@ services:
     # rétrograder sans réécrire ce fichier : ADMIN_PORTAINER_IMAGE, défini dans
     # docker-admin/.env.local (ignoré par git), reprend la valeur précédente.
     image: ${ADMIN_PORTAINER_IMAGE:-portainer/portainer-ce:2.45.3-alpine}
+    # Le conteneur se met lui-même en état de sauvegarder, à chaque démarrage.
+    #
+    # Pourquoi : Portainer crée ses fichiers en 0600 root:root (mesuré sur le
+    # premier amorçage du volume), et la console de sauvegarde lit en uid 1001,
+    # groupe 33 — sans un geste de droits, le job du soir passe sur la base Bolt
+    # et le dit « Success » avec un fichier de moins. Ce geste était fait par
+    # « scripts/deploy.sh » (étape 4) et « scripts/backup.sh --grant-only » :
+    # suffisant au déploiement, pas suffisant ensuite, parce qu'un fichier créé
+    # EN COURANT de route (une stack rangée dans « compose/ », par exemple)
+    # attendait la prochaine ouverture des droits.
+    #
+    # Le « g+s » sur les dossiers et l'« umask 027 » règlent justement ce cas :
+    # un fichier nouveau naît groupe 33 et en 0640, donc archivable dès la nuit
+    # suivante. Le « chgrp/chmod » sur l'existant couvre la reprise d'un volume
+    # venu d'ailleurs et le fichier que Bolt ouvre en 0600.
+    #
+    # Le geste est fait par Portainer sur SA donnée, avec ses trois seules
+    # capacités CHOWN/FOWNER/FSETID — détaillées plus bas, à la ligne « cap_add » :
+    # aucun autre conteneur, aucun dossier de l'hôte, et rien de programmé sur
+    # l'hôte — la règle « pas de cron seul » tient.
+    #
+    # Les « 2>/dev/null » sont voulus : une passe de droits qui échoue ne doit
+    # pas empêcher Portainer de démarrer. C'est scripts/validate.sh qui sonne
+    # l'alerte (« aucun écart de droits sur /data »), pas l'absence du service.
+    entrypoint:
+      - /bin/sh
+      - -c
+    # Une seule ligne, jamais un bloc « | » : « *.yaml » ne figure pas dans les
+    # règles « eol=lf » de .gitattributes, et un poste Windows réglé en
+    # « core.autocrlf=true » rendrait le bloc avec des fins de ligne CRLF — donc
+    # des « \r » collés à chaque commande, que busybox exécuterait mal. Le « \r »
+    # d'une ligne unique tombe après le guillemet fermant, hors de la valeur.
     command:
+      - 'umask 027; chgrp -R 33 /data 2>/dev/null; find /data -type d -exec chmod 2750 {} + 2>/dev/null; find /data -type f -exec chmod 0640 {} + 2>/dev/null; exec /portainer "$@"'
+      # Argument zéro du « sh -c » : ce qui suit devient « $@ », soit les drapeaux
+      # de Portainer, écrits dessous et lisibles comme avant.
+      - sh
       # -H explicite : c'est l'environnement local que l'interface doit découvrir,
       # et rien d'autre — aucun agent, aucune URL distante.
       - --host
@@ -174,16 +210,24 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # CHOWN et FOWNER, et rien de plus : la sauvegarde passe par le groupe 33 de
-    # la console, donc quelqu'un doit pouvoir changer le groupe et le mode des
-    # fichiers que Portainer écrit en 0600 (mesuré : « cap_drop: ALL » seul fait
-    # échouer « chgrp -R 33 /data » du script, et le job du soir n'archiverait
-    # que des dossiers vides en le disant à peine). Ces deux capacités ne
-    # permettent ni d'écouter un port privilégié, ni de charger un module, ni de
-    # touching à la socket d'un autre conteneur.
+    # CHOWN, FOWNER, FSETID — et rien de plus. Les deux premières sont ce que
+    # exige la sauvegarde : quelqu'un doit pouvoir changer le groupe et le mode
+    # des fichiers que Portainer écrit en 0600 (mesuré : « cap_drop: ALL » seul
+    # fait échouer « chgrp -R 33 /data », et le job du soir n'archiverait que des
+    # dossiers vides en le disant à peine). La troisième est mesurée aujourd'hui,
+    # pour le bit setgid : sous « cap_drop: ALL » avec CHOWN+FOWNER seuls,
+    # « chmod 2750 /data/compose » échoue en silence — le répertoire reste à 750,
+    # busybox ne rend aucune erreur ; avec le jeu de capacités par défaut de
+    # Docker, qui porte FSETID, le même chmod passe. Sans ce bit, tout fichier
+    # que Portainer crée EN COURANT de route naît dans le groupe 0 et la console
+    # ne le lit pas avant le prochain démarrage.
+    #
+    # Aucune des trois n'ouvre un port privilégié, un module du noyau ou l'accès
+    # aux fichiers d'un autre conteneur : elles portent sur les bits de mode.
     cap_add:
       - CHOWN
       - FOWNER
+      - FSETID
     networks:
       - app
     labels:

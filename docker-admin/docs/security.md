@@ -31,12 +31,22 @@ sur le réseau privé du mandataire.
 Montage `rw` sur `/var/run/docker.sock`, et c'est voulu : administrer Docker
 passe par les verbes `POST` de l'API. Ce qui est autour :
 
-- `cap_drop: ALL`, puis `cap_add: [CHOWN, FOWNER]` ** seulement **. Ces deux
-  capacités existent pour un seul geste, celui de la sauvegarde (ouvrir le groupe
-  33 sur les fichiers que Portainer écrit en 0600). Mesuré sans elles :
-  `chgrp -R 33 /data` échoue et le job du soir n'archiverait que des dossiers
-  vides. Elles ne permettent ni d'écouter un port privilégié, ni de charger un
-  module, ni de toucher la socket d'un autre conteneur.
+- `cap_drop: ALL`, puis `cap_add: [CHOWN, FOWNER, FSETID]` ** seulement **. Ces
+  trois capacités existent pour un seul geste, celui de la sauvegarde : ouvrir le
+  groupe 33 sur les fichiers que Portainer écrit en 0600, et poser le bit setgid
+  sur ses dossiers pour que ceux d'après naissent déjà lisibles. Mesuré sans
+  elles : `chgrp -R 33 /data` échoue et le job du soir n'archiverait que des
+  dossiers vides. Sans `FSETID`, plus subtil : le `chmod 2750` de busybox rend
+  code de sortie 0 et laisse le dossier en `750` — l'échec est muet, seul le mode
+  final le dit (d'où le contrôle « CAP_FSETID au catalogue » dans `validate.sh`).
+  Aucune des trois ne permet d'écouter un port privilégié, de charger un module
+  ni de toucher la socket d'un autre conteneur.
+- l'`entrypoint` enveloppe `/portainer` d'une passe de droits (`umask 027`,
+  `chgrp`, `chmod 2750` / `0640`) puis lui rend la main avec `exec … "$@"`. Le
+  service se donne donc ses droits à lui-même à chaque démarrage, sans
+  planificateur et sans qu'un second conteneur ait à tenir la socket. Mesuré
+  après l'ajout : PID 1 toujours `/portainer --host … --data /data`, arguments
+  d'origine intacts.
 - `no-new-privileges:true`, `networks: [app]` — pas le réseau privé du
   mandataire, dont il n'a que faire puisqu'il a la socket.
 - limites `0.50` CPU / `384M`, mesurées à 18–26 Mio.

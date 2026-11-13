@@ -23,9 +23,18 @@ partir plutôt que d'en créer un neuf et vide — c'est voulu.
 Ordre sur une machine neuve :
 
 ```bash
-cd /opt/yabiladi-infra && ./deploy.sh          # l'infrastructure : Traefik, DBackup, Loki…
-cd docker-admin && bash scripts/deploy.sh      # cette pile
+cd /opt/yabiladi-infra && ./deploy.sh          # l'infrastructure, puis cette pile à sa suite
 ```
+
+`./deploy.sh` enchaîne `docker-admin/scripts/deploy.sh` tout seul, après ses
+propres contrôles (fonction `deploy_admin_console`, en bout de parcours — la
+console est le dernier venu, son échec ne fait l'impasse ni sur le redémarrage
+d'Alloy ni sur l'état de l'infrastructure, qui s'affiche avant). Un échec de la
+console remonte et arrête le script avec son propre message : l'infrastructure
+reste posée, mais le geste est dit incomplet. Le dépôt n'étant pas garanti
+partout — une machine qui ne recevrait que le projet de l'infrastructure, par
+exemple — l'enchaînement s'efface en silence si `docker-admin/` n'existe pas, et
+`bash docker-admin/scripts/deploy.sh` reste jouable seul, à tout moment.
 
 ## Le réglage de la machine
 
@@ -68,7 +77,10 @@ Ce que la commande fait, dans l'ordre :
 3. attend la santé de chacun (`/_ping` du mandataire, `:9000/` de Portainer,
    `healthcheck` de Dozzle) ;
 4. ouvre les droits du volume pour le groupe 33 de la console de sauvegarde,
-   depuis le propre conteneur de Portainer ;
+   depuis le propre conteneur de Portainer (`backup.sh --grant-only`). C'est un
+   rappel : l'ouverture est déjà faite à chaque démarrage du service par son
+   entrypoint, et c'est ce qui couvre les fichiers nés après (`docs/backup-restore.md`,
+   « Les droits, c'est le job ») ;
 5. sonde les deux services en interne, puis depuis le réseau de Traefik.
 
 Ce qu'elle ne fait pas : `git pull`, un `up` sur `../compose.yaml`, un redémarrage
@@ -133,11 +145,25 @@ bash docker-admin/scripts/validate.sh --resources
 
 Lecture seule de bout en bout. Le script se termine par le compte des réussites,
 des échecs et **des contrôles non jouables** — un contrôle qui n'a pas pu se jouer
-n'est pas un contrôle réussi. Sur ce poste, le 2026-11-12 : 68 réussites, 0 échec,
-3 non joués, les trois étant volontairement hors de portée d'un script — le chemin
+n'est pas un contrôle réussi. **77 contrôles**, joués deux fois le 2026-11-12 au
+soir sur ce poste : **74 réussites, 0 échec, 3 non joués** à la première passe ;
+**73, 1, 3** à la seconde.
+
+Les trois non joués sont volontairement hors de portée d'un script : le chemin
 authentifié (il faudrait le mot de passe), le compte administrateur de Portainer
 (à créer à la main, ci-dessus) et l'« Add host » de Dozzle, qui se lit mais ne se
 referme pas depuis l'image (voir docs/security.md).
+
+L'échec de la seconde passe est la sonde sortante sur `https://www.yabiladi.com/`,
+et c'est le seul contrôle qui traverse un conteneur applicatif : `php` venait
+d'être recréé à 22:00:13, la sonde est partie dans la seconde qui a suivi. La
+ligne ne se contente pas de le dire — elle compare les deux chemins et rend
+`000` par Traefik **alors que nginx répond « 200 en 0.21s » en direct**, ce qui
+nomme la cause (connexions périmées que Traefik garde sur une adresse qui a
+changé, il retombe sur ses pieds au deuxième ou troisième essai) au lieu de
+courir après une régression qui n'existe pas. Aucun des trois conteneurs de cette
+pile n'est impliqué, et leur propre ligne à chacun est restée verte aux deux
+passes. Détails dans docs/troubleshooting.md.
 
 Pour jouer quand même le chemin authentifié, un opérateur qui tient le mot de
 passe peut passer deux variables dans son environnement — jamais dans un fichier :
