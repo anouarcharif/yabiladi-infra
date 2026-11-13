@@ -376,6 +376,9 @@ services:
       # (0640/0750). Sans ce groupe, la console lit ces fichiers en refus et
       # l'archive du soir est partielle sans le dire autrement ; mesuré sur ce
       # poste : « REFUSEE en 1001:1001 » avec PGID absent, lecture OK avec.
+      # Le magasin ACME est la seule source du périmètre où ce n'est pas le groupe
+      # qui ouvre la lecture mais l'utilisateur : Traefik y exige 0600, donc
+      # « chown 1001 » (voir open_acme_to_backup dans deploy.sh).
       PUID: "1001"
       PGID: "33"
     volumes:
@@ -459,10 +462,12 @@ services:
       - ${MEDIAKIT_HOST_DIR:-/opt/yabiladi-mediakit}:/backup/mediakit:ro
       - ${FACTURATION_HOST_DIR:-/opt/yabiladi-facturation}:/backup/facturation:ro
       # Certificats ACME : sans eux, le domaine est en erreur TLS jusqu'au
-      # renouvellement. Volume nommé, monté ici en lecture seule. Le fichier
-      # acme.json est posé par Traefik en 0600 root:root ; deploy.sh le rend
-      # lisible au groupe 33 de la console (voir open_acme_to_backup), sinon le
-      # job le saute chaque nuit en se signalant « partiel ».
+      # renouvellement. Volume nommé, monté ici en lecture seule. Traefik exige de
+      # son magasin le mode 0600 — un bit de groupe et il retire le résolveur en le
+      # disant seulement dans un log d'erreur, donc plus aucun renouvellement — :
+      # la liseuse n'est pas un bit de plus mais un changement de propriétaire.
+      # « deploy.sh » (open_acme_to_backup) donne le fichier à l'utilisateur 1001
+      # de la console et laisse le mode à 0600 ; root écrit dessus de toute façon.
       - traefik_acme:/backup/docker/traefik-acme:ro
       # Autorité de développement et certificats auto-signés du poste (regénérés
       # par docker/traefik/generate-cert.sh). Les comptes htpasswd du même

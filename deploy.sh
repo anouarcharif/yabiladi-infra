@@ -533,23 +533,60 @@ deploy_admin_console() {
         || die "console d'administration non déployée — l'infrastructure, elle, est posée. Rejouer seul : bash docker-admin/scripts/deploy.sh"
 }
 
-# Le magasin ACME (certificats Let's Encrypt) est écrit par Traefik en 0600
-# root:root dans le volume nommé traefik_acme, que la console monte en lecture
-# seule. L'image de sauvegarde refuse de tourner en root (mesuré : « Running as
-# root (PUID/PGID=0) is not supported ») : sans cette ouverture, le fichier
-# manque à l'archive chaque nuit et le job se déclare « partiel ».
+# Le magasin ACME (certificats Let's Encrypt) est écrit par Traefik dans le volume
+# nommé traefik_acme, que la console monte en lecture seule. L'image de sauvegarde
+# refuse de tourner en root (mesuré : « Running as root (PUID/PGID=0) is not
+# supported ») : sans ouverture, le fichier manque à l'archive chaque nuit et le
+# job se déclare « partiel ».
 #
-# C'est le seul fichier du périmètre qu'on rend lisible exprès : un renouvellement
-# de certificat rate, une réémission compte dans les quotas Let's Encrypt, et
-# contrairement aux comptes htpasswd — écartés du job, leur source de vérité est
-# le coffre — il n'existe nulle part ailleurs. 0640 root:33 : le groupe de la
-# console lit (PGID 33 dans compose.yaml), seul root écrit. Si Traefik recrée le
-# fichier (mode 0600), la sauvegarde du soir le redit et ce déploiement le corrige
-# au passage suivant.
+# Mais CE fichier-là obéit à une règle que les autres du périmètre ignorent :
+# Traefik refuse de charger un magasin dont le mode porte le moindre bit groupe ou
+# autre, et il ne le dit qu'au niveau « erreur », dans un redémarrage. Mesuré le
+# 2026-11-13 avec le réglage « 0640 root:33 » que posait ce script :
+#
+#   ERR The ACME resolve is skipped from the resolvers list
+#       error="unable to get ACME account: permissions 640 for
+#       /letsencrypt/acme.json are too open, please use 600" resolver=letsencrypt
+#
+# Le résolveur retiré de la liste, plus aucune demande et plus aucun
+# renouvellement, et le site répondait le certificat de la CA locale de Traefik —
+# mesuré « issuer=CN=yabiladi.com, notAfter=12 février 2029 » sur les trois hôtes —
+# à la place de celui de Let's Encrypt. Rien d'autre ne le signalait : le
+# certificat présenté, lui, se voit.
+#
+# L'ouverture se fait donc par un CHANGEMENT DE PROPRIÉTAIRE et non par un bit de
+# groupe : le fichier devient la propriété de l'utilisateur 1001 de la console
+# (« PUID » de compose.yaml) et reste en 0600, le mode que Traefik exige. Traefik
+# tourne en root dans son conteneur et root passe au-dessus du mode
+# (CAP_DAC_OVERRIDE) : il lit, écrit et recrée comme avant. Mesuré ici, après le
+# redémarrage qui fait taire l'erreur : une écriture root sur un double du magasin
+# en 1001:33 0600 est acceptée, et « md5sum » côté console ressort les mêmes 3414
+# octets que dans le conteneur Traefik.
+#
+# Un bit de moins qu'avant, et c'est une amélioration : le « 0640 » livrait la clé
+# du compte ACME à tout processus du groupe 33 — nginx, php, n'importe quel
+# conteneur montant ce volume ; le « 0600 » ne la livre plus qu'à l'utilisateur de
+# la console.
+#
+# Si Traefik recrée le magasin (fichier absent : premier déploiement, ou
+# restauration d'une archive), il le pose en 0600 root:root. Le TLS n'est pas cassé,
+# mais la console ne lit plus le fichier et le job se dit partiel — ce geste le
+# remet à son propriétaire au déploiement suivant, et le contrôle ci-dessous le dit.
 open_acme_to_backup() {
+    local droits
     docker compose exec -T --user root traefik sh -c \
-        'chgrp 33 /letsencrypt/acme.json 2>/dev/null; chmod 0640 /letsencrypt/acme.json 2>/dev/null; true' \
-        >/dev/null 2>&1 || log "     acme.json non rendu lisible (Traefik arrêté ?) : le job de sauvegarde le signalera"
+        'chown 1001:33 /letsencrypt/acme.json 2>/dev/null; chmod 0600 /letsencrypt/acme.json 2>/dev/null; true' \
+        >/dev/null 2>&1 \
+        || { log "     acme.json non rendu lisible (Traefik arrêté ?) : le job de sauvegarde le signalera"; return 0; }
+
+    # « 600 » seulement : un « 400 » serait refusé à Traefik, qui doit écrire.
+    # busybox « stat -c » est là dans l'image alpine de Traefik (vérifié).
+    droits="$(docker compose exec -T --user root traefik sh -c 'stat -c "%a %u:%g" /letsencrypt/acme.json' 2>/dev/null || true)"
+    case "$droits" in
+        600\ *1001:33) log "     acme.json en 0600 1001:33 : Let's Encrypt actif et console en mesure de l'archiver" ;;
+        '')            log "     acme.json introuvable dans le volume : rien à ouvrir (Traefik n'a pas encore de magasin)" ;;
+        *)             log "     ATTENTION : acme.json en $droits — Traefik exige 0600 et retirerait le résolveur Let's Encrypt ; la console, elle, ne lit qu'en 1001:33" ;;
+    esac
 }
 
 # Même problème pour la base Grafana. Mesuré le 2026-11-12 : « grafana.db » sort
