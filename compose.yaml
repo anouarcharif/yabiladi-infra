@@ -180,6 +180,19 @@ services:
       # désormais le routeur websecure ci-dessous, protégé par le compte Dagu.
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
+      # Réseau d'accès aux conteneurs, nommé et non « le premier trouvé ». Sans
+      # cette ligne, Traefik choisit un réseau par conteneur en itérant une carte
+      # Go — donc dans un ordre non déterministe — et deux services du site sont
+      # multiréseau : « nginx » et « navidrome » appartiennent aussi à
+      # « yabiladi_radio_proxy ». Mesuré le 2026-11-13 après recréation de Traefik :
+      # le routeur « yabiladi » pointait sur 172.31.250.3 (la face radio_proxy de
+      # nginx, joignable par Navidrome, injoignable par Traefik), et tout le site
+      # répondait 504 pendant 5 s — un établissement de connexion qui n'aboutit
+      # pas — pendant que le même port 80 se testait en « nc » depuis Traefik sur
+      # 172.21.0.15. Tous les services routés (site, dagu, grafana, backups,
+      # navidrome, mediakit, facturation, antennes) sont sur « yabiladi_app », la
+      # borne est donc sans contrepartie.
+      - --providers.docker.network=yabiladi_app
       - --providers.file.filename=/etc/traefik/dynamic.yml
       - --entrypoints.web.address=:80
       # « forwardedHeaders.trustedIPs » : sans cette ligne, Traefik REMPLACE le
@@ -215,6 +228,33 @@ services:
       - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:-}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      # --- budgets de la chaîne, côté mandataire ---------------------------
+      # Aucune durée n'était écrite ici : Traefik appliquait ses défauts, dont un
+      # temps de garde envers le serveur d'origine plus long que les 30 s que
+      # nginx mettait alors sur ses connexions inactives. Traefik réémettait donc
+      # sur une socket déjà morte — d'où des 502 sans aucune trace dans le journal
+      # d'accès de nginx, la requête n'étant jamais arrivée à l'application.
+      #
+      # Règle unique pour les trois maillons : c'est toujours le plus près du
+      # visiteur qui ferme, et le plus près de l'origine qui attend.
+      #   Cloudflare  100 s  (en-tête de réponse, non réglable ici)
+      #   Traefik      75 s  responseHeaderTimeout  -> nginx répond son 504 à 60 s
+      #   nginx        60 s  fastcgi_read_timeout   -> php-fpm a 120 s devant lui
+      # et, côté connexions gardées ouvertes :
+      #   Traefik ferme les siennes à 60 s  <  nginx les siennes à 75 s
+      #   Traefik laisse le visiteur dormir 600 s  >  Cloudflare (400 s au plus)
+      # « dialTimeout » à 5 s : joindre nginx est local, un établissement qui
+      # traîne signifie que le conteneur est mort, et le attendre ne le rend pas.
+      - --serversTransport.forwardingTimeouts.dialTimeout=5s
+      - --serversTransport.forwardingTimeouts.responseHeaderTimeout=75s
+      - --serversTransport.forwardingTimeouts.idleConnTimeout=60s
+      # Les deux suivants portent sur la connexion du VISITEUR vers Traefik, pas
+      # sur celle de l'origine. Lire et écrire à 300 s laisse passer un
+      # téléversement de 20 Mo sur une ligne lente et un téléchargement sur
+      # réseau mobile, tout en bornant enfin une socket ouverte pour rien.
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=300s
+      - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=300s
+      - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=600s
     ports:
       - "80:80"
       - "443:443"
