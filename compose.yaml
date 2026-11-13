@@ -448,7 +448,7 @@ services:
       # défauts relatifs identiques dans deux dépôts ne désignent pas le même
       # dossier, et le job archivait un répertoire vide en se disant « réussi ».
       # Configuration : voir scripts/backup/README.md.
-      - ${MARIADB_BACKUP_HOST_PATH:-/data/backup/mariadb}:/backup/mariadb-backups:ro
+      - ${MARIADB_BACKUP_HOST_PATH:-/data/backup/files/mariadb}:/backup/mariadb-backups:ro
       # Discothèque des quatre antennes : les MP3 que lisent sc_trans et le
       # player. Comme les médias téléversés, rien ne la régénère — ni git, ni
       # les bases ; elle vient de l'arbre du V1. La variable est celle du
