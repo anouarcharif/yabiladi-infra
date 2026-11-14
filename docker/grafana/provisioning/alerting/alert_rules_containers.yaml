@@ -3,10 +3,10 @@ apiVersion: 1
 # Alertes sur l'arrêt de conteneurs.
 #
 # UNE RÈGLE PAR CONTENEUR CRITIQUE (php, nginx, traefik, dagu, loki,
-# postfix, facturation, mediakit) : l'alerte nomme explicitement le conteneur
-# down, pas besoin d'ouvrir le dashboard pour savoir lequel. Le détecteur
-# global « baisse anormale » a été retiré : une alerte agrégée ne nomme pas le
-# conteneur et se déclenchait sur la moindre instabilité de cAdvisor. Ses deux
+# postfix, facturation, mediakit, manticore) : l'alerte nomme explicitement le
+# conteneur down, pas besoin d'ouvrir le dashboard pour savoir lequel. Le
+# détecteur global « baisse anormale » a été retiré : une alerte agrégée ne nomme
+# pas le conteneur et se déclenchait sur la moindre instabilité de cAdvisor. Ses deux
 # UID survivants sont supprimés par « deleteRules » ci-dessous.
 #
 # PRINCIPE. cAdvisor expose container_last_seen pour chaque conteneur : un
@@ -555,3 +555,63 @@ groups:
             L'application mediakit (pub.yabiladi.com) ne répond plus (502 Bad Gateway).
             Vérifier : docker compose ps mediakit-nginx ; docker compose logs --since 10m mediakit-nginx.
             Redémarrage : docker compose up -d mediakit-nginx.
+
+      # ---------------------------------------------------------------------
+      # Le moteur de recherche du forum. Seul ici à ne publier aucun port :
+      # le module Phorum l'atteint par le réseau interne, et ses erreurs sont
+      # avalées — une page de résultats vide, en HTTP 200, sans message. Cette
+      # règle est donc le seul signal quand il tombe ; le log du module
+      # (« sphinx_search: … ») ne dit rien tant que personne ne le lit.
+      # ---------------------------------------------------------------------
+      - uid: container-manticore-down
+        title: Manticore arrêté
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: yabiladi-prometheus
+            model:
+              datasource: { type: prometheus, uid: yabiladi-prometheus }
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="manticore"} > (time() - 60)) OR vector(0)'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 60, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: eq, params: [0] }
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: manticore
+        annotations:
+          summary: 'Conteneur Manticore arrêté'
+          description: >-
+            Le conteneur manticore n'est plus vu par cAdvisor.
+            La recherche du forum (/forum/search.php) rend « Aucun résultat » en HTTP 200,
+            sans erreur visible : c'est cette alerte qui le signale.
+            Vérifier : docker compose ps manticore ; docker compose logs --since 10m manticore.
+            Redémarrage : docker compose up -d manticore.
+            La table se reconstruit si le volume est perdu : bin/console app:forum-search:ensure-schema
+            puis le DAG forum_search_backfill.

@@ -523,6 +523,84 @@
       }
     },
     {
+      "type": "stat",
+      "title": "Manticore",
+      "description": "Conteneur manticore (recherche plein texte du forum). UP = vu par cAdvisor dans les 60 dernieres secondes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yabiladi-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yabiladi-prometheus"
+          },
+          "expr": "count(container_last_seen{name=~\".+\", instance=\"$serveur\", service=\"manticore\"} > (time() - 60)) OR vector(0)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "limit": null
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 6
+      }
+    },
+    {
       "type": "row",
       "title": "Orchestration et services",
       "gridPos": {
