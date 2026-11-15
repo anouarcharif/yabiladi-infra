@@ -101,10 +101,9 @@
 ###< secrets générés ###
 
 ###> sauvegardes locales ###
-# Les trois chemins où la console écrit quand aucune valeur machine n'est
+# Les deux chemins où la console écrit quand aucune valeur machine n'est
 # déclarée : destination des archives (DBACKUP_DEST_HOST_PATH), atelier de
-# restauration (DBACKUP_RESTORE_HOST_PATH), atterrissage des mariabackup
-# (MARIADB_BACKUP_HOST_PATH). Sur une machine, ils désignent le NFS et ces
+# restauration (DBACKUP_RESTORE_HOST_PATH). Sur une machine, ils désignent le NFS et ces
 # dossiers ne servent pas ; sur un poste de développement, ils peuvent porter
 # des données réelles téléchargées d'un scellement.
 # Le motif « ** » exclut le contenu, les lignes « ! » laissent passer les
@@ -116,12 +115,6 @@
 /backup/restore/**
 !/backup/restore/**/
 !/backup/restore/**/.gitkeep
-/backup/mariadb/**
-!/backup/mariadb/**/
-!/backup/mariadb/**/.gitkeep
-/backup/db/**
-!/backup/db/**/
-!/backup/db/**/.gitkeep
 ###< sauvegardes locales ###
 
 ###> disque de rétention de la pile de logs ###
@@ -145,19 +138,6 @@ keys.txt
 # pas emplacement attendu.
 /docker/legacy/credentials.env
 ###< coffre à secrets ###
-
-###> clés SSH et configuration de la récupération MariaDB ###
-# Clé privée générée par tools/backup/generate-ssh-key.sh pour le DAG
-# « mariadb_fetch » : accès root au serveur MariaDB de production. Elle n'est
-# pas scellée dans le coffre (elle se régénère) et ne doit en aucun cas être
-# committée, où qu'elle soit posée sur la machine.
-/deploy/secrets/id_rsa_mariadb
-/deploy/secrets/id_rsa_mariadb.pub
-# Configuration de la récupération SSH (variables d'environnement) : les valeurs
-# vivent dans docker/legacy/credentials.env (dépôt du site), un .env local posé
-# dans tools/backup contiendrait les mêmes.
-/tools/backup/.env
-###< clés SSH ###
 
 ###> artefacts régénérés ###
 node_modules/
