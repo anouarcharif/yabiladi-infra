@@ -1,7 +1,10 @@
 # Alerting Grafana provisionné par fichiers.
 
 Grafana relit ce répertoire au démarrage et sur `POST
-/api/admin/provisioning/alerting/reload`. Trois rôles, cinq fichiers :
+/api/admin/provisioning/alerting/reload` — ce POST est désormais la dernière
+étape du déploiement (`reload_grafana_alerting()` dans `deploy.sh`) : les
+fichiers étant montés, un `git pull` qui ajoute une règle ne provisionne rien
+tant que le conteneur tourne déjà. Trois rôles, six fichiers :
 
 | Fichier | Ce qu'il décrète |
 | --- | --- |
@@ -10,6 +13,40 @@ Grafana relit ce répertoire au démarrage et sur `POST
 | `alert_rules_radio.yaml` | CE QUI EST surveillé (les requêtes Loki et les seuils). |
 | `alert_rules_email.yaml` | Rebonds du relais Postfix, dossier « Applications ». |
 | `alert_rules_containers.yaml` | Arrêt d'un conteneur critique, dossier « Infrastructure ». |
+| `alert_rules_crash.yaml` | Crash d'un processus À L'INTÉRIEUR d'un conteneur qui reste Up, dossier « Infrastructure ». |
+
+# Un conteneur vert peut porter un composant mort
+
+Constaté le 2026-11-15 : le worker Buddy du conteneur manticore meurt en boucle
+(`abnormal exit, status=255`) pendant que le conteneur est Up, que searchd
+répond sur `/sql` et que `container-manticore-down` reste inactive. Ses règles
+lisent `container_last_seen` : tant que le conteneur vit, la série vit, et le
+crash d'un composant interne ne change AUCUNE métrique. La couverture de ces
+morts-là ne peut donc être qu'une ligne de log — c'est `alert_rules_crash.yaml`.
+
+Deux pièges mesurés avant d'écrire la moindre expression :
+
+- **L'écho de Loki.** Loki journalise chaque requête reçue, texte compris. Une
+  règle dont le motif est `fatal error` alimente donc son propre compteur quand
+  elle cible `service="loki"` : relevé 996 lignes en sept jours pour le seul
+  motif retenu, 4 629 pour `panic:`. D'où zéro règle de crash pour loki, grafana,
+  alloy, prometheus, node-exporter et cadvisor — ils restent couverts par leurs
+  règles « … arrêté ».
+- **Les marqueurs qui ne sont pas des crashs.** `exited on signal` : 57 lignes
+  sur sept jours dans php, toutes en signal 15 (SIGTERM), la fermeture normale
+  d'un worker au chômage. `exit status 1` : les arrêts demandés par le
+  superviseur des quatre antennes. `level=error` : 304 lignes/jour pour Loki, 53
+  pour Alloy. `Uncaught PHP Exception` : 522 réponses 500 du site en sept jours.
+  Les motifs retenus sont listés avec leur compte de sept jours dans l'en-tête du
+  fichier ; `noDataState: y est OK` (ici, le silence est l'état souhaité),
+  contraire des règles « … arrêté » où l'absence de série EST l'alarme.
+
+Une règle a été jouée de bout en bout le 2026-11-15 : une ligne de crash
+injectée sur le flux stderr du conteneur php (`/proc/1/fd/2`, son stdout étant
+`/dev/null`) fait passer `container-php-crash` de `inactive` à `firing` à
+l'évaluation suivante, avec le titre et le label `container` attendus chez
+l'Alertmanager. La livraison du message lui-même n'a pas été revérifiée ici ;
+le transport est documenté plus haut.
 
 Le dashboard qui montre les mêmes signaux est en face,
 `docker/grafana/dashboards/radio/yabiladi-radio-sante.json` : les règles disent

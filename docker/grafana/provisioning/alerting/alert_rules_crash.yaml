@@ -1,0 +1,769 @@
+apiVersion: 1
+
+# Alertes sur la MORT D'UN PROCESSUS À L'INTÉRIEUR D'UN CONTENEUR QUI RESTE VERT.
+#
+# POURQUOI CE FICHIER, EN TROIS CHIFFRES. Le 2026-11-15, le worker Buddy du
+# conteneur manticore est mort en boucle (« Worker::report_error(): worker(pid=38,
+# id=0) abnormal exit, status=255 ») pendant que le conteneur, lui, restait Up et
+# que le daemon répondait sur /sql. « container-manticore-down » repose sur
+# « container_last_seen » : tant que le conteneur tourne, la série existe, la
+# règle reste inactive, et rien ne dit que le composant est mort. Mesuré ce
+# même jour : 25 règles actives, une seule citait manticore, aucune règle Loki
+# ne sélectionnait ses logs. Un conteneur vert peut porter un composant mort.
+#
+# LE SIGNAL EST UNE LIGNE DE LOG, PAS UN MÉTRIQUE. Un crash de processus ne
+# déplace aucun compteur cAdvisor quand le PID 1 survit ; seule la trace écrite
+# sort du mutisme. La source est donc Loki (datasource « yabiladi-loki »), et la
+# collection est celle d'Alloy « loki.source.docker », c'est-à-dire le flux
+# stdout/stderr du conteneur : tout ce qui n'est pas écrit sur ce flux est
+# invisible ici, y compris les journaurs fichiers (var/log/*.log du site).
+#
+# CALIBRAGE — chaque motif a été compté sur Loki sur sept jours, le 2026-11-15,
+# avant d'être retenu (fenêtre [168h], « sum by (service) ») :
+#   abnormal exit ......... manticore 30 (= 15 crashs × 2 lignes, voir plus bas).
+#   PHP Fatal error ....... php 16, manticore 8.
+#   panic: , fatal: ....... 0 partout sauf loki (écho, voir plus bas).
+#   core dumped, got fatal signal, SIGSEGV ... 0 partout.
+#   emerg ................. nginx 6 (refus de configuration : « invalid value
+#                           "${YB_FPM_KEEPALIVE:-32}" », « pcre2_compile() failed »,
+#                           « invalid number of arguments in "try_files" »).
+#   exited on signal N .... php 57 — les 57 en signal 15 (SIGTERM), la fermeture
+#                           normale d'un worker au chômage. Le motif n'accepte
+#                           donc que SIGSEGV/SIGABRT/SIGBUS/SIGKILL.
+#   exit status N ......... radio-* 4 chacun : « INFO stopped: sc_trans (exit
+#                           status 1) » = arrêt demandé par le superviseur, pas un
+#                           crash. Motif écarté.
+#   level=error ........... loki 304, alloy 53, grafana 10 sur 24 h : le bruit
+#                           normal d'exploitation. Motif écarté.
+#   Uncaught PHP Exception  php 522 sur 7 j : ce sont des réponses 500 du site,
+#                           pas un processus mort. Motif écarté d'ici — une règle
+#                           de débit sur les 500 serait un autre besoin.
+#   PHP Fatal error dans « container-php-crash » : ÉCARTÉ lui aussi, à regret et
+#   pour une raison chiffrée. Ces 16 lignes sur 7 j sont les fataux du forum
+#   legacy (list.php:326 « Undefined constant "page" », notifications.php:237
+#   « mysqli_query(): Argument #1 must be of type mysqli, string given »,
+#   index.php:481) — des bogues connus et non corrigés (tâches #97 et #98). Une
+#   règle au-dessus de zéro enverrait un mail deux à onze fois par jour pour une
+#   page qui rend déjà une erreur visible. Le site, lui, est couvert par
+#   « container-php-down » et par les règles d'erreurs nginx.
+#
+# LE PIÈGE DE L'ÉCHO — et la raison pour laquelle loki, grafana, alloy,
+# prometheus, node-exporter et cadvisor n'ont AUCUNE règle ici. Loki journalise
+# une ligne par requête reçue, texte de la requête compris. Écrire un motif
+# « fatal error » dans une règle ciblant « service="loki" », c'est faire
+# correspondre le motif à la trace de la règle elle-même : mesuré 996 lignes en
+# 7 j sur service="loki » pour le seul motif « abnormal exit|panic:|PHP Fatal
+# error|… », 4 629 pour « panic: » seul. La règle serait en Alerting en
+# permanence et son mail ne signifierait rien. Ces six conteneurs restent donc
+# couverts uniquement par les règles « … arrêté » (et « container-loki-down »),
+# qui détectent l'absence de conteneur, pas le crash d'un composant interne.
+#
+# POURQUOI « noDataState: OK », CONTRAIREMENT AUX RÈGLES « … ARRÊTÉ ». Ici
+# l'absence de résultat est l'état normal et souhaité : aucune ligne de crash.
+# « count_over_time » sur un sélecteur qui ne matche rien ne renvoie pas 0 mais
+# une série vide, donc du NoData ; avec « noDataState: Alerting » les douze
+# règles hurleraient toutes les minutes sur une pile parfaitement saine. Les
+# règles « … arrêté » lisent l'absence exactement dans l'autre sens — c'est le
+# silence de cAdvisor qui signifie le mort — et leurs auteurs ont contourné le
+# problème par « OR vector(0) ».
+#
+# MANTICORE COMPTE DEUX FOIS. Chaque ligne Buddy sort deux fois du conteneur, une
+# brute et une horodatée par searchd (mesuré : 30 lignes pour 15 crashs). Le
+# seuil reste « > 0 », donc la règle fonctionne dans les deux cas ; ne pas
+# diviser les compteurs par deux « pour corriger ».
+#
+# FENÊTRE ET RÉPÉTITION. [10m] avec « for: 0m » : un crash isolé est vu à la
+# minute d'évaluation qui suit la ligne. Le « repeat_interval » de la politique
+# « severity="critical" » (notification_policies.yaml) est d'une heure : un
+# crash qui dure ne envoie pas un mail par minute.
+#
+# LE MAIL. Ces règles héritent de « severity: critical » et remontent donc à la
+# route homonyme de notification_policies.yaml, vers le contact point
+# « yabiladi-radio-alertes » (anouar@yabiladi.com, Resend via GF_SMTP_*). Le nom
+# du conteneur est dans le titre et dans le label « container », jamais
+# seulement dans l'expression.
+groups:
+  - orgId: 1
+    name: crash-des-processus
+    folder: 'Infrastructure'
+    interval: 1m
+    rules:
+      # ---------------------------------------------------------------------
+      # Règles par conteneur. Le motif est celui du runtime de chaque service,
+      # calibré comme ci-dessus.
+      # ---------------------------------------------------------------------
+      - uid: container-php-crash
+        title: PHP-FPM — crash d'un processus worker
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="php"} |~ "(?i)(abnormal exit|core dumped|panic:|exited on signal [0-9]+ [(](SIGSEGV|SIGABRT|SIGBUS|SIGKILL))" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: php
+          signal: crash
+        annotations:
+          summary: 'Conteneur php : un processus PHP-FPM a crashé alors que le conteneur tourne'
+          description: >-
+            Une ligne de crash est sortie du flux stdout du conteneur php dans les
+            10 dernières minutes : worker mort anormalement, mort sur signal de
+            segmentation, ou panique. Le conteneur reste Up, donc
+            « container-php-down » ne dit rien : c'est précisément le cas que cette
+            règle couvre. Les fataux du forum legacy (« PHP Fatal error ») ne sont
+            PAS dans ce motif, voir l'en-tête du fichier.
+            Voir la ligne exacte : docker compose logs --since 15m php | grep -Ei
+            'abnormal exit|core dumped|panic:|SIGSEGV'
+            (ou, dans Grafana, le dashboard « Logs » avec service="php").
+            Contexte : docker compose ps php ; docker compose top php.
+            Redémarrage : docker compose restart php (puis kill -USR2 1 sur le
+            master fpm si la config a changé).
+
+      - uid: container-facturation-php-crash
+        title: Facturation PHP-FPM — crash d'un processus worker
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="facturation-php"} |~ "(?i)(abnormal exit|core dumped|panic:|exited on signal [0-9]+ [(](SIGSEGV|SIGABRT|SIGBUS|SIGKILL))" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: facturation-php
+          signal: crash
+        annotations:
+          summary: 'Conteneur facturation-php : un processus PHP-FPM a crashé alors que le conteneur tourne'
+          description: >-
+            Ligne de crash sur le flux stdout du conteneur facturation-php dans les
+            10 dernières minutes. La facturation (crm.yabiladi.com) continue de
+            rendre ses pages si le master fpm survit ; le conteneur reste Up et
+            « container-facturation-php-down » ne dit rien.
+            Voir la ligne exacte : dans Yabiladi-Facturation-V2,
+            docker compose logs --since 15m php | grep -Ei
+            'abnormal exit|core dumped|panic:|SIGSEGV'
+
+      - uid: container-mediakit-php-crash
+        title: Mediakit PHP-FPM — crash d'un processus worker
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="mediakit-php"} |~ "(?i)(abnormal exit|core dumped|panic:|exited on signal [0-9]+ [(](SIGSEGV|SIGABRT|SIGBUS|SIGKILL))" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: mediakit-php
+          signal: crash
+        annotations:
+          summary: 'Conteneur mediakit-php : un processus PHP-FPM a crashé alors que le conteneur tourne'
+          description: >-
+            Ligne de crash sur le flux stdout du conteneur mediakit-php dans les
+            10 dernières minutes. Le mediakit (pub.yabiladi.com) peut rester
+            joignable alors qu'un worker est mort ; le conteneur reste Up et
+            « container-mediakit-php-down » ne dit rien.
+            Voir la ligne exacte : dans Yabiladi-Mediakit-V2,
+            docker compose logs --since 15m php | grep -Ei
+            'abnormal exit|core dumped|panic:|SIGSEGV'
+
+      - uid: container-nginx-crash
+        title: Nginx — processus mort ou configuration refusée
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="nginx"} |~ "(?i)(emerg|core dumped|exited on signal [0-9]+ [(](SIGSEGV|SIGABRT|SIGBUS|SIGKILL))" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: nginx
+          signal: crash
+        annotations:
+          summary: 'Conteneur nginx : worker tué par un signal, ou fichier de configuration refusé'
+          description: >-
+            Une ligne « [emerg] », un worker mort sur SIGSEGV/SIGABRT/SIGBUS/SIGKILL,
+            ou un core dump sont apparus sur le flux stdout du conteneur nginx dans
+            les 10 dernières minutes. Un « [emerg] » signifie que la configuration
+            est refusée : nginx tourne encore sur l'ancienne, ou ne s'est pas
+            rechargé, et le conteneur reste Up. Mesuré le 2026-11-15 sur sept
+            jours : 6 lignes « emerg », toutes des refus de configuration pendant
+            un déploiement (valeur non résolue « ${YB_FPM_KEEPALIVE:-32} »,
+            parenthèse manquante dans une regex, « try_files » mal argumenté).
+            Voir la ligne exacte : docker compose logs --since 15m nginx | grep -i emerg
+            Contrôle : docker compose exec -T nginx nginx -t
+            Recharge après correction : docker compose exec -u root nginx kill -s USR2 1
+
+      - uid: container-facturation-nginx-crash
+        title: Facturation Nginx — processus mort ou configuration refusée
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="facturation-nginx"} |~ "(?i)(emerg|core dumped|exited on signal [0-9]+ [(](SIGSEGV|SIGABRT|SIGBUS|SIGKILL))" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: facturation-nginx
+          signal: crash
+        annotations:
+          summary: 'Conteneur facturation-nginx : worker tué par un signal, ou configuration refusée'
+          description: >-
+            Ligne « [emerg] », worker mort sur signal de crash, ou core dump sur le
+            flux stdout du conteneur facturation-nginx dans les 10 dernières
+            minutes. La facturation peut continuer de servir une configuration
+            périmée sans que le conteneur ne tombe.
+            Voir la ligne exacte : dans Yabiladi-Facturation-V2,
+            docker compose logs --since 15m nginx | grep -i emerg ;
+            docker compose exec -T nginx nginx -t
+
+      - uid: container-mediakit-nginx-crash
+        title: Mediakit Nginx — processus mort ou configuration refusée
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="mediakit-nginx"} |~ "(?i)(emerg|core dumped|exited on signal [0-9]+ [(](SIGSEGV|SIGABRT|SIGBUS|SIGKILL))" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: mediakit-nginx
+          signal: crash
+        annotations:
+          summary: 'Conteneur mediakit-nginx : worker tué par un signal, ou configuration refusée'
+          description: >-
+            Ligne « [emerg] », worker mort sur signal de crash, ou core dump sur le
+            flux stdout du conteneur mediakit-nginx dans les 10 dernières minutes.
+            Voir la ligne exacte : dans Yabiladi-Mediakit-V2,
+            docker compose logs --since 15m nginx | grep -i emerg ;
+            docker compose exec -T nginx nginx -t
+
+      - uid: container-manticore-crash
+        title: Manticore — composant interne en crash (recherche de forum et Buddy)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="manticore"} |~ "(?i)(abnormal exit|PHP Fatal error|got fatal signal|core dumped|panic:)" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: manticore
+          signal: crash
+        annotations:
+          summary: 'Conteneur manticore : le daemon ou son couche Buddy a crashé alors que le conteneur tourne'
+          description: >-
+            Une ligne de crash est sortie du flux stdout du conteneur manticore dans
+            les 10 dernières minutes. Cas réel du 2026-11-15 : le worker Buddy meurt
+            en boucle (« Worker::report_error(): worker(pid=38, id=0) abnormal exit,
+            status=255 », précédé de « PHP Fatal error: Uncaught ErrorException:
+            fopen(/dev/stdout) ») alors que searchd répond sur 9308/sql et que le
+            conteneur reste Up. Conséquence mesurée : /metrics et /api/v2/search ne
+            répondent plus (404 et 501), la recherche de forum par /sql continue de
+            fonctionner.
+            Voir la ligne exacte : docker compose logs --since 15m manticore | grep -Ei
+            'abnormal exit|PHP Fatal error|panic:'
+            Distinguer les deux : le daemon vit-il ?
+            docker compose exec -T php php -r 'echo @file_get_contents("http://manticore:9308/sql?mode=raw&query=SHOW%20STATUS") ? "daemon vivant" : "daemon muet";'
+            Buddy vit-il ? docker compose exec -T manticore wget -qO- http://localhost:9308/api/v2/sql (501 = Buddy mort).
+            Cause connue du crash Buddy : « log = /dev/stdout » dans
+            docker/manticore/manticore.conf — CrashDetector relit ce chemin en
+            lecture, /dev/stdout est un pipe en écriture seule dans le conteneur.
+            Redémarrage : docker compose up -d manticore.
+
+      - uid: container-traefik-crash
+        title: Traefik — panique du processus alors que le conteneur tourne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="traefik"} |~ "(?i)(panic:|fatal:|core dumped|abnormal exit)" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: traefik
+          signal: crash
+        annotations:
+          summary: 'Conteneur traefik : le proxy a écrit une panique ou une erreur fatale'
+          description: >-
+            Une ligne « panic: », « fatal: », un core dump ou une mort anormale sont
+            apparus sur le flux stdout de traefik dans les 10 dernières minutes.
+            Traefik est la seule porte d'entrée HTTPS de la pile : une panique dans
+            un routeur peut laisser le conteneur Up avec une partie des hôtes
+            injoignable, ce que « container-traefik-down » ne voit pas.
+            Voir la ligne exacte : docker compose logs --since 15m traefik | grep -Ei
+            'panic:|fatal:'
+            Contrôle des routeurs : docker compose exec -T traefik traefik validateConfiguration
+
+      - uid: container-dagu-crash
+        title: Dagu — panique de l'ordonnanceur alors que le conteneur tourne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="dagu"} |~ "(?i)(panic:|fatal:|core dumped|abnormal exit)" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: dagu
+          signal: crash
+        annotations:
+          summary: 'Conteneur dagu : l''ordonnanceur des tâches planifiées a écrit une panique ou une erreur fatale'
+          description: >-
+            Une ligne « panic: », « fatal: », un core dump ou une mort anormale sont
+            apparus sur le flux stdout de dagu dans les 10 dernières minutes. Si le
+            serveur reste Up alors que son ordonnanceur est mort, plus aucune tâche
+            ne part (footer, carrousel radio, prieres, MSN, newsletters) sans
+            qu'aucune règle de conteneur ne le dise.
+            Voir la ligne exacte : docker compose logs --since 15m dagu | grep -Ei
+            'panic:|fatal:'
+            Contrôle des files : docker compose exec -T dagu dagu ls ; puis le
+            dashboard « Dagu » pour la dernière exécution de chaque DAG.
+
+      - uid: container-navidrome-crash
+        title: Navidrome — panique du serveur musical alors que le conteneur tourne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="navidrome"} |~ "(?i)(panic:|fatal:|core dumped|abnormal exit)" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: navidrome
+          signal: crash
+        annotations:
+          summary: 'Conteneur navidrome : le serveur Subsonic a écrit une panique ou une erreur fatale'
+          description: >-
+            Une ligne « panic: », « fatal: », un core dump ou une mort anormale sont
+            apparus sur le flux stdout de navidrome dans les 10 dernières minutes.
+            Aucune règle « … arrêté » n'existe pour navidrome : cette règle est sa
+            seule couverture d'alerte.
+            Voir la ligne exacte : docker compose logs --since 15m navidrome | grep -Ei
+            'panic:|fatal:'
+
+      - uid: container-postfix-crash
+        title: Postfix — processus fatal alors que le conteneur tourne
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="postfix"} |~ "(?i)(fatal:|panic:|abnormal exit|core dumped)" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: postfix
+          signal: crash
+        annotations:
+          summary: 'Conteneur postfix : un démon Postfix a écrit une erreur fatale'
+          description: >-
+            Une ligne « fatal: », « panic: », une mort anormale ou un core dump sont
+            apparus sur le flux stdout de postfix dans les 10 dernières minutes.
+            Postfix se relance lui-même pour ses démons filleuls : un master mort
+            peut laisser la file s'empiler sans que le conteneur ne tombe. Les
+            rejets côté destinataire sont couverts ailleurs (règles
+            « email-rebond-* ») ; ici c'est bien le serveur qui est en cause.
+            Voir la ligne exacte : docker compose logs --since 15m postfix | grep -Ei
+            'fatal:|panic:'
+            Contrôle de la file : docker compose exec -T postfix postqueue -p
+
+      - uid: container-dbackup-crash
+        title: DBackup — processus de l'agent de sauvegarde en crash
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({job="docker", service="dbackup"} |~ "(?i)(FATAL ERROR|heap out of memory|core dumped|abnormal exit)" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: infrastructure
+          container: dbackup
+          signal: crash
+        annotations:
+          summary: 'Conteneur dbackup : le runtime Node a écrit une erreur fatale ou une saturation de tas'
+          description: >-
+            Une ligne « FATAL ERROR », « heap out of memory », un core dump ou une
+            mort anormale sont apparus sur le flux stdout de dbackup dans les 10
+            dernières minutes. Le conteneur peut rester Up avec un agent incapable
+            de lancer les jobs 04:00-04:28 : un job qui ne démarre pas n'est pas un
+            job en échec, et les alertes de job ne le voient pas.
+            MOTIF NON CONTREVÉRIFIÉ : aucun crash de dbackup n'existe dans
+            l'historique Loki (0 ligne sur sept jours pour tous les marqueurs
+            testés), donc le motif retenu est celui du runtime Node/V8, pas une
+            trace observée ici. Les autres motifs de cette page sont calibrés sur
+            des lignes réelles.
+            Voir la ligne exacte : docker compose logs --since 15m dbackup | grep -Ei
+            'FATAL ERROR|heap out of memory'
+            Contrôle des jobs : API DBackup /api/jobs (sonde documentée dans
+            tools/backup), puis la file du serveur.

@@ -711,6 +711,38 @@ ensure_logging_mounts() {
     done
 }
 
+# Grafana ne relit « /etc/grafana/provisioning » qu'au démarrage et sur un POST
+# explicite. Or ce répertoire est un montage « :ro » du dépôt : un « git pull »
+# qui ajoute une règle d'alerte ne provisionne RIEN tant que le conteneur tourne
+# déjà, et « up -d » ne le recrée pas — le fichier est là, l'interface ne montre
+# rien, aucune erreur nulle part. Mesuré le 2026-11-15 sur le poste de
+# développement : les douze règles de « alert_rules_crash.yaml » sont passées de
+# « inexistantes » à « provisionnées et en évaluation » par ce seul POST, sans
+# redémarrage.
+#
+# La requête part DEPUIS le conteneur et en root, parce que le mot de passe
+# d'administration est un fichier monté en 0400 root (GF_SECURITY_ADMIN_-
+# PASSWORD__FILE) : c'est le seul endroit où il est lisible, et sa valeur n'est
+# jamais affichée ni copiée sur l'hôte. L'utilisateur vient de l'environnement du
+# conteneur (GF_SECURITY_ADMIN_USER, « yabiladi » ici) et non d'une supposition.
+# Échec non bloquant : un Grafana en train de démarrer ne doit pas faire tomber
+# un déploiement d'infrastructure, mais le dire — une règle qui n'est pas
+# provisionnée est une règle qui n'alerte pas.
+reload_grafana_alerting() {
+    local code
+    code="$(docker compose exec -u root grafana sh -c '
+        PW=$(cat /run/secrets/grafana_admin_password)
+        curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -u "${GF_SECURITY_ADMIN_USER:-admin}:${PW}" \
+            http://127.0.0.1:3000/api/admin/provisioning/alerting/reload
+    ' 2>/dev/null || true)"
+    if [ "$code" = "200" ]; then
+        log "     provisioning d'alerting Grafana rechargé"
+    else
+        log "     (Grafana: provisioning d'alerting NON rechargé — code ${code:-aucun}. Rejouer à la main le POST /api/admin/provisioning/alerting/reload depuis le conteneur, en root, avec le fichier de secret.)"
+    fi
+}
+
 # --- Contrôles ---------------------------------------------------------------
 
 # Ce que ce déploiement vérifie, et ce qu'il ne vérifie plus : uniquement les
@@ -917,6 +949,10 @@ case "$verbe" in
         # les offsets de lecture vivent dans le volume alloy_data et l'ingestion
         # reprend à l'octet déjà envoyé.
         docker compose restart alloy >/dev/null 2>&1 || log "     (alloy: restart manuel requis)"
+
+        # Même raison qu'Alloy juste au-dessus, côté alertes : les fichiers de
+        # provisioning sont montés, Grafana ne les relit pas seul.
+        reload_grafana_alerting
 
         log "5/5 Contrôles…"
         checks_infra
