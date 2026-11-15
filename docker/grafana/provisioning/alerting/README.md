@@ -39,14 +39,24 @@ Deux pièges mesurés avant d'écrire la moindre expression :
   pour Alloy. `Uncaught PHP Exception` : 522 réponses 500 du site en sept jours.
   Les motifs retenus sont listés avec leur compte de sept jours dans l'en-tête du
   fichier ; `noDataState: y est OK` (ici, le silence est l'état souhaité),
-  contraire des règles « … arrêté » où l'absence de série EST l'alarme.
+  contraire des règles « … arrêté » où l'absence de série EST l'alarme. Ce
+  n'est pas qu'une question de bruit : `sum(count_over_time(…))` sur une fenêtre
+  vide ne renvoie **aucune série**, pas `0` — une règle `noDataState: Alerting`
+  hurlerait donc en permanence sur une pile saine, et `noDataState: OK` est aussi
+  ce qui lui permet de s'éteindre (voir l'essai ci-dessous).
 
 Une règle a été jouée de bout en bout le 2026-11-15 : une ligne de crash
 injectée sur le flux stderr du conteneur php (`/proc/1/fd/2`, son stdout étant
 `/dev/null`) fait passer `container-php-crash` de `inactive` à `firing` à
 l'évaluation suivante, avec le titre et le label `container` attendus chez
-l'Alertmanager. La livraison du message lui-même n'a pas été revérifiée ici ;
-le transport est documenté plus haut.
+l'Alertmanager. La fin d'alerte a été vérifiée pareil : dix minutes plus tard,
+quand la ligne est sortie de la fenêtre `[10m]`, les annotations d'état sont
+passées de `A=B=C=1` (20:53:10) à `A=B=C=-1` (21:03:10) — le `-1` est la valeur
+Grafana de NoData, donc l'extinction passe bien par l'absence de ligne dans la
+fenêtre, jamais par un `0`. Alertmanager ne tenait alors plus aucune alerte
+active, et les douze règles du groupe étaient récapitulées
+`state=inactive health=ok`. La livraison du message lui-même n'a
+pas été revérifiée ici ; le transport est documenté plus haut.
 
 Le dashboard qui montre les mêmes signaux est en face,
 `docker/grafana/dashboards/radio/yabiladi-radio-sante.json` : les règles disent
