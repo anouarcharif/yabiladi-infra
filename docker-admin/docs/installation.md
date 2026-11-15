@@ -53,7 +53,7 @@ serveur. Absentes, c'est le défaut écrit dans `compose.yaml` qui s'applique.
 
 Sur un poste de développement, un troisième fichier — ignoré par git — vide le
 résolveur ACME, puisque ni Let's Encrypt ne peut joindre cette machine ni son
-certificat ne couvre ces noms :
+port 80 est exposé :
 
 ```bash
 cp docker-admin/compose.override.yaml.example docker-admin/compose.override.yaml
@@ -62,6 +62,22 @@ cp docker-admin/compose.override.yaml.example docker-admin/compose.override.yaml
 C'est le même geste que pour `grafana`, `dbackup` et le tableau de bord Traefik.
 Sans lui, le premier `up` reste bloqué sur une demande de certificat qui aboutira
 de toute façon sur le serveur, pas ici.
+
+Le certificat de poste prend alors la main, et sa liste SAN doit porter chaque nom
+que les cinq projets déclarent dans leurs `Host(…)` — sinon Traefik répond avec
+son certificat par défaut, le handshake tombe avant la porte basicauth et le
+navigateur n'affiche jamais la fenêtre d'identification (mesuré le 2026-11-15 sur
+`logs`, `portainer`, `pub` ; docs/troubleshooting.md). Pour que le navigateur ne
+gargouille plus d'avertissement sur ce poste, une seule ligne, côté Windows, avec
+le dialogue de consentement qui va avec :
+
+```powershell
+Import-Certificate -FilePath 'C:\Yabiladi_Upgrade\Yabiladi-Infra\docker\traefik\certs\yabiladi.com.crt' `
+  -CertStoreLocation 'Cert:\CurrentUser\Root'
+```
+
+À rejouer **à chaque génération de certificat** : l'empreinte change, le magasin
+reste.
 
 ## Déployer
 
@@ -147,12 +163,22 @@ Lecture seule de bout en bout. Le script se termine par le compte des réussites
 des échecs et **des contrôles non jouables** — un contrôle qui n'a pas pu se jouer
 n'est pas un contrôle réussi. **77 contrôles**, joués deux fois le 2026-11-12 au
 soir sur ce poste : **74 réussites, 0 échec, 3 non joués** à la première passe ;
-**73, 1, 3** à la seconde.
+**73, 1, 3** à la seconde. Passe du 2026-11-15, après l'ajout de `logs`,
+`portainer` et `pub` à la liste SAN du certificat local : **72, 0, 5**, et le
+total reste 77. Les deux non joués de plus ont une explication chacun, et aucune
+n'est une régression : l'empreinte au sol, parce que cette passe-là s'est jouée
+sans `--resources`, et la ligne Traefik, qui refuse désormais de conclure tant
+que son redémarrage — nécessaire au rechargement du certificat — date de moins
+de quinze minutes. Une troisième chose s'est vue ce jour-là, qui n'est pas un
+compte mais un contenu : le réglage `canAddHosts` de Dozzle est sorti `false`,
+alors qu'il était `true` les 12 et 13 novembre sur la même image et le même
+`command:` — d'où une ligne qui rend la valeur lue au lieu d'une promesse.
 
-Les trois non joués sont volontairement hors de portée d'un script : le chemin
+Les trois non joués permanents sont volontairement hors de portée d'un script : le chemin
 authentifié (il faudrait le mot de passe), le compte administrateur de Portainer
-(à créer à la main, ci-dessus) et l'« Add host » de Dozzle, qui se lit mais ne se
-referme pas depuis l'image (voir docs/security.md).
+(à créer à la main, ci-dessus) et le réglage `canAddHosts` de Dozzle, qui se lit
+mais ne se commande pas depuis l'image (voir docs/security.md). S'y ajoute
+l'empreinte au sol, non mesurée sans `--resources`.
 
 L'échec de la seconde passe est la sonde sortante sur `https://www.yabiladi.com/`,
 et c'est le seul contrôle qui traverse un conteneur applicatif : `php` venait

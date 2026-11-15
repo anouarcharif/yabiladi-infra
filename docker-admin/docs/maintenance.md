@@ -144,7 +144,8 @@ confirmé. C'est aussi pour ça qu'aucune tâche planifiée ne tourne pour ça :
 n'est pas un succès de complaisance : un contrôle qui n'a pas pu se jouer est écrit
 comme tel, avec la raison. Les trois attendus sur ce poste : le chemin
 authentifié (mot de passe hors du dépôt), le compte administrateur de Portainer
-(à créer à la main), l'« Add host » de Dozzle (se lit, ne se ferme pas).
+(à créer à la main), le réglage `canAddHosts` de Dozzle (valeur lue à chaque
+passe, et elle a changé entre deux passes — ne pas la lire comme un état acquis).
 
 Un cas à ne pas mal lire : `https://www.yabiladi.com/ → 504` **pendant que la
 ligne voisine dit que nginx répond en 0,2 s en direct**. Le témoin croisé est là

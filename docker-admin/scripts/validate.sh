@@ -391,15 +391,18 @@ if [ -n "$cid" ]; then
             no "Dozzle se déclare « $reglage: ${v:-non dit} » — l'interface aurait une capacité d'administration"
         fi
     done
-    # « canAddHosts », mesuré « true » sur deux démarrages distincts de v11.4.2 :
-    # l'interface propose d'ajouter un hôte Docker. Ce n'est pas la main sur CETTE
-    # socket — le mandataire refuse tout POST et tout verbe d'écriture, vérifié
-    # plus bas — mais c'est une sortie : un hôte ajouté serait joint depuis le
-    # réseau « yabiladi_app », et le réglage n'existe pas en dur dans l'image.
-    # Deux barrières restent devant ce geste (plage d'adresses, puis compte
-    # basicauth). Le consigner plutôt que le compter comme un succès.
+    # « canAddHosts » n'est pas une constante de l'image : mesuré « true » sur deux
+    # démarrages distincts de v11.4.2 (12 et 13 novembre), mesuré « false »
+    # aujourd'hui 15 novembre sur la même image, le même « command: » sans drapeau
+    # et le même « DOCKER_HOST ». La valeur se lit à chaque passe et s'affiche
+    # telle quelle ; ce qui ne change pas, c'est la portée : ajouter un hôte n'est
+    # pas la main sur CETTE socket — le mandataire refuse tout POST et tout verbe
+    # d'écriture, vérifié plus bas — mais c'est une sortie, un hôte ajouté étant
+    # joint depuis le réseau « yabiladi_app ». Deux barrières restent devant ce
+    # geste (plage d'adresses, puis compte basicauth). Le consigner plutôt que le
+    # compter comme un succès.
     v="$(printf '%s' "$page" | grep -oE '"canAddHosts":(true|false)' | head -1 | grep -oE '(true|false)$')"
-    skip "Dozzle propose « Add host » (canAddHosts: ${v:-non dit}) — hors du périmètre du mandataire, sous les deux barrières d'entrée ; voir docs/security.md"
+    skip "Dozzle : réglage « canAddHosts » lu à ${v:-non dit} dans la page servie (valeur constatée changeante, voir docs/security.md) — hors du périmètre du mandataire, sous les deux barrières d'entrée"
 
     # La liste que l'interface affiche se lit à la source : le verbe et l'adresse
     # exacts que Dozzle emploie, depuis son propre espace réseau.
@@ -549,7 +552,29 @@ if [ "$QUICK" -eq 0 ]; then
     esac
 fi
 if [ -n "$tr_id" ]; then
-    ok "Traefik : démarré le $(docker inspect -f '{{.State.StartedAt}}' "$tr_id") — ce déploiement ne l'a ni recréé ni redémarré"
+    # Une date de démarrage, seule, ne prouvait rien : cette ligne affirmait « ce
+    # déploiement ne l'a ni recréé ni redémarré » sans rien comparer, et elle l'a
+    # affirmé le 2026-11-15 pendant que je redémarrais Traefik pour recharger le
+    # certificat local. Ce qui se calcule vraiment : « Created » répond à
+    # « recréé ? », et l'écart entre « Created » et « StartedAt » répond à
+    # « redémarré depuis quand ? ». Le « RestartCount », lui, ne compte que les
+    # reprises voulues par la politique de relance — un « docker restart » manuel
+    # n'y change rien (mesuré : 0, avec un démarrage de ce jour).
+    created_raw="$(docker inspect -f '{{.Created}}' "$tr_id")"
+    started_raw="$(docker inspect -f '{{.State.StartedAt}}' "$tr_id")"
+    created_ep="$(date -d "${created_raw%.*}Z" +%s 2>/dev/null || printf '0')"
+    started_ep="$(date -d "${started_raw%.*}Z" +%s 2>/dev/null || printf '0')"
+    now_ep="$(date +%s)"
+    if [ "$created_ep" = 0 ] || [ "$started_ep" = 0 ]; then
+        skip "Traefik : créé le ${created_raw%.*}, démarré le ${started_raw%.*} — ancienneté non calculée (« date -d » absent de ce poste) : compare ces deux dates à ton dernier geste, cette ligne n'est pas une preuve"
+    else
+        up_min=$(( (now_ep - started_ep) / 60 ))
+        if [ "$up_min" -lt 15 ]; then
+            skip "Traefik : conteneur créé le ${created_raw:0:16} donc non recréé, mais démarré il y a ${up_min} min — redémarrage récent, et ce contrôle ne peut pas dire lequel : « deploy.sh » ne le redémarre jamais, donc c'est soit un geste assumé (le rechargement d'un certificat local l'exige, docs/troubleshooting.md), soit une reprise de la machine. Dans les deux cas, ce n'est pas la réponse à un 504."
+        else
+            ok "Traefik : conteneur créé le ${created_raw:0:16}, en marche depuis $((up_min / 60)) h $((up_min % 60)) min — ni recréé ni redémarré depuis au moins un quart d'heure ; cette pile ne le redémarre jamais d'elle-même"
+        fi
+    fi
 fi
 for s in php nginx dagu; do
     cid2="$(docker ps -q --filter label=com.docker.compose.service="$s" --filter status=running | head -1)"

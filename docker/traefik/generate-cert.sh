@@ -17,10 +17,20 @@ else
   CERT_DIR_OPENSSL="$CERT_DIR"
 fi
 
+# La liste ci-dessous doit couvrir tous les « Host(…) » déclarés par les compose
+# des cinq projets. Un nom absent n'est pas une erreur visible : Traefik répond
+# sur le 443 avec son propre certificat par défaut (« TRAEFIK DEFAULT CERT », CA
+# inconnue du navigateur), donc le handshake échoue avant que la fenêtre
+# d'identification n'apparaisse — le compte basicauth, lui, est bien accepté.
+#
+# Ce script change l'empreinte du certificat à chaque exécution : sur un poste de
+# développement où le magasin « Racines approuvées » a été rempli, il faut
+# réimporter le .crt après coup, sinon le navigateur retombe sur
+# ERR_CERT_AUTHORITY_INVALID. Voir docker-admin/docs/installation.md.
 MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
   -keyout "$CERT_DIR_OPENSSL/yabiladi.com.key" \
   -out "$CERT_DIR_OPENSSL/yabiladi.com.crt" \
   -subj "/CN=yabiladi.com" \
-  -addext "subjectAltName=DNS:yabiladi.com,DNS:www.yabiladi.com,DNS:en.yabiladi.com,DNS:es.yabiladi.com,DNS:ar.yabiladi.com,DNS:it.yabiladi.com,DNS:m.yabiladi.com,DNS:rac.yabiladi.com,DNS:static.yabiladi.com,DNS:regional.yabiladi.com,DNS:tribunes.yabiladi.com,DNS:islam.yabiladi.com,DNS:communiques.yabiladi.com,DNS:dagu.yabiladi.com,DNS:navidrome.yabiladi.com,DNS:backups.yabiladi.com,DNS:grafana.yabiladi.com,DNS:traefik.yabiladi.com,DNS:ws.yabiladi.com,DNS:localhost,IP:127.0.0.1"
+  -addext "subjectAltName=DNS:yabiladi.com,DNS:www.yabiladi.com,DNS:en.yabiladi.com,DNS:es.yabiladi.com,DNS:ar.yabiladi.com,DNS:it.yabiladi.com,DNS:m.yabiladi.com,DNS:rac.yabiladi.com,DNS:static.yabiladi.com,DNS:regional.yabiladi.com,DNS:tribunes.yabiladi.com,DNS:islam.yabiladi.com,DNS:communiques.yabiladi.com,DNS:dagu.yabiladi.com,DNS:navidrome.yabiladi.com,DNS:backups.yabiladi.com,DNS:grafana.yabiladi.com,DNS:traefik.yabiladi.com,DNS:ws.yabiladi.com,DNS:logs.yabiladi.com,DNS:portainer.yabiladi.com,DNS:pub.yabiladi.com,DNS:localhost,IP:127.0.0.1"
 
 printf 'Certificat généré : %s\n' "$CERT_DIR/yabiladi.com.crt"

@@ -100,11 +100,18 @@ Deux particularités du moteur et de Dozzle, toutes deux mesurées ici :
 - **Dozzle écrit ses propres journaux sur stderr** : `?stdout=1` seul donne
   0 octet, `?stdout=1&stderr=1&tail=20` donne le texte.
 
-### `canAddHosts` est à `true` dans la configuration servie
+### `canAddHosts` change de valeur d'une passe à l'autre
 
-Ce n'est pas un réglage oublié : **aucun drapeau de Dozzle ne l'éteint**, mesuré
-sur v11.4.2 en lisant sa propre page. La portée réelle est une **sortie** — la
-possibilité de proposer au navigateur une adresse d'hôte Docker à interroger —
+Ce n'est pas un réglage oublié, et ce n'est pas non plus une constante : **aucun
+drapeau de Dozzle ne le commande**, mesuré sur `--help` de v11.4.2 en lisant sa
+propre page. La valeur servie a été relevée `true` sur deux démarrages distincts
+les 12 et 13 novembre, puis `false` le 15 novembre — même image
+`v11.4.2-alpine`, même `command:` sans drapeau, même `DOCKER_HOST`, `/data` vide.
+Rien ici n'explique le basculement, et le croire stable serait une erreur de
+diagnostic : `validate.sh` rend la valeur lue à la passe, pas une promesse.
+
+Ce qui ne dépend pas de la valeur, c'est la portée. Ce champ est une **sortie** —
+la possibilité de proposer au navigateur une adresse d'hôte Docker à interroger —
 pas un droit d'administration local : les verbes d'écriture restent refusés par
 le mandataire (`POST` renvoie 403, mesuré) et Dozzle n'a pas la socket.
 
@@ -155,6 +162,107 @@ docker compose --env-file ../.env -f compose.yaml -f compose.override.yaml up -d
 Sans lui, `up` reste bloqué sur une demande de certificat. C'est le même réglage
 que pour `grafana`, `dbackup` et le tableau de bord Traefik.
 
+### Aucun prompt d'identification sur `logs` ou `portainer`, alors qu'un `curl -k` rend `401`
+
+Cause mesurée le 2026-11-15 : le nom manquait de la liste SAN du certificat de
+poste. Un nom que le certificat local ne porte pas ne fait tomber Traefik dans
+aucune erreur — il répond sur le 443 avec son certificat par défaut
+(`CN=TRAEFIK DEFAULT CERT`, CA inconnue du navigateur), et le handshake se coupe
+**avant** la porte basicauth. Ce jour-là `logs`, `portainer` et `pub` avaient
+pourtant leur routeur et leur `401` en interne, et `dagu` — lui dans la liste —
+s'ouvrait sans difficulté : la fenêtre d'identification n'a jamais eu à se
+justifier, c'est le TLS qui parlait. Ce contrôle est invisible dans
+`validate.sh` tel qu'il est écrit : ses sondes HTTP passent par `curl -k`
+(ligne 108), donc un `401` y ressemble à une porte saine même servi sur le
+mauvais certificat.
+
+```bash
+for h in logs portainer pub dagu; do
+  printf '%-10s ' "$h"
+  echo | openssl s_client -connect 127.0.0.1:443 -servername "$h.yabiladi.com" 2>/dev/null \
+    | openssl x509 -noout -subject | sed 's/subject=CN=//'
+done
+grep -n 'subjectAltName' ../docker/traefik/generate-cert.sh
+```
+
+**Remède** : ajouter le nom à la liste de `../docker/traefik/generate-cert.sh`,
+rejouer `sh docker/traefik/generate-cert.sh`, puis `docker compose restart
+traefik` — c'est le geste rejoué et mesuré ici ; le fournisseur de fichiers ne
+relit un certificat que s'il voit bouger son fichier de configuration, et
+`dynamic.yml`, lui, ne change pas. Le dossier `docker/traefik/certs/` est ignoré
+par git : les octets générés ne se committent pas, seule la liste de noms se
+commite.
+
+Ce `restart` laisse un témoin, et il faut le connaître avant de crier à la
+régression : dans les quinze minutes qui le suivent, `validate.sh` rend sa ligne
+Traefik en **non joué** — « créé le … donc non recréé, mais démarré il y a N
+min ». C'est voulu. La phrase que cette ligne portait avant aujourd'hui
+affirmait « ce déploiement ne l'a ni recréé ni redémarré » sans rien comparer, et
+elle l'a affirmé pendant que ce redémarrage-là venait d'avoir lieu ; elle calcule
+désormais les deux dates et s'interdit la conclusion quand le démarrage est
+récent. `RestartCount`, lui, reste à `0` (mesuré) : il ne compte que les reprises
+voulues par la politique de relance, pas un `docker restart` manuel.
+
+Une conséquence à connaître avant d'appeler cela « réglé » : le certificat de
+poste n'était **porté par aucun magasin Windows** (mesuré le 2026-11-15 au matin,
+`Root`, `TrustedPeople`, `AuthRoot`, `My` en `LocalMachine` et `CurrentUser` :
+zéro entrée `yabiladi`/`TRAEFIK`, et la sonde Schannel rendait `UntrustedRoot`
+pour les sept noms). Ce qui changeait ce jour-là, c'est seulement que `logs`,
+`portainer` et `pub` présentaient désormais le même certificat stable que les
+cinq consoles en place, au lieu de celui que Traefik régénère à chaque démarrage.
+
+### Supprimer l'avertissement du navigateur sur un poste de développement
+
+Rendre ce certificat digne de confiance est un geste **sur la machine**, pas dans
+ce dépôt, et Windows le rappelle : toute écriture dans un magasin « Racines
+approuvées » ouvre une fenêtre « Avertissement de sécurité » que seul un humain
+valide. Joué le 2026-11-15 sur ce poste, pour le compte courant :
+
+```powershell
+Import-Certificate -FilePath 'C:\Yabiladi_Upgrade\Yabiladi-Infra\docker\traefik\certs\yabiladi.com.crt' `
+  -CertStoreLocation 'Cert:\CurrentUser\Root'      # la fenêtre de consentement fait partie du geste
+```
+
+Mesuré après coup, dans cet ordre : `CurrentUser\Root` 47 entrées dont 1 avec
+l'empreinte du jour ; `LocalMachine\Root` 46 entrées, aucune (l'import par
+compte ne couvre ni les autres comptes ni les processus élevés) ; la sonde
+Schannel rend « aucune alerte » sur `logs`, `portainer`, `dagu`, `grafana`,
+`backups`, `pub`, `www` ; Chrome, en instance `--headless` avec un profil jetable
+et donc sans toucher au navigateur de l'opérateur, rend sur ces sept noms soit
+`net::ERR_INVALID_AUTH_CREDENTIALS` — les cinq consoles, c'est la porte basicauth
+qui répond après un TLS accepté — soit un DOM complet pour `pub` et `www`.
+
+Le contrôle qui empêche de lire ces sept réussites comme une vérification
+désactivée : `radio` et `sirwa`, absents de la liste SAN et donc servis par le
+certificat par défaut de Traefik, rendent toujours `net::ERR_CERT_AUTHORITY_INVALID`.
+
+Deux pièges restent :
+
+- **il faut réimporter après chaque régénération.** `sh docker/traefik/generate-cert.sh`
+  produit une empreinte nouvelle ; le magasin, lui, garde l'ancienne, et Chrome
+  retombe sur `ERR_CERT_AUTHORITY_INVALID` sans que rien n'ait changé ailleurs. Le
+  contrôle se fait par empreinte, pas par sujet :
+
+  ```powershell
+  Get-ChildItem Cert:\CurrentUser\Root | Where-Object { $_.Subject -like '*yabiladi*' } |
+    Select-Object Thumbprint, NotAfter
+  ```
+
+- une entrée déjà présente ne se remplace pas : `Import-Certificate` ajoute, il ne
+  met pas à jour. Retirer l'ancienne avant, ou la laisser comme vestige tant
+  qu'elle n'est plus servie.
+
+L'alternative propre, si ce manège se reproduit, est de séparer l'autorité du
+certificat serveur (une racine qui ne bouge plus, un certificat signé par elle et
+régénéré à volonté — ce que fait `mkcert`) : la liste SAN cesserait d'être un
+prérequis du magasin. Ce n'est pas joué ici, et cela touche
+`docker/traefik/generate-cert.sh` et `dynamic.yml`.
+
+En production, rien de tout cela ne se rejoue : le label
+`tls.certresolver=letsencrypt` de chaque routeur demande son propre certificat
+(HTTP-01 sur l'entrée `web`, `../compose.yaml:228-230`), et le seul prérequis
+reste l'enregistrement DNS du nom plus le port 80 joignable.
+
 ### `504` sur une console, alors que le conteneur répond en interne
 
 Joué ici, sur `https://www.yabiladi.com/` (le site, pas cette pile) : `504` par
@@ -165,8 +273,8 @@ pas un diagnostic de l'application.
 Le réflexe est de relancer Traefik. **Ne pas le faire** : cette pile ne le
 redémarre jamais, et un `docker restart` de Traefik coupe toutes les consoles à
 la fois. `validate.sh` rend exactement cette comparaison dans sa ligne
-d'avertissement, et la section « non-régression » rappelle la date de démarrage
-du conteneur pour prouver qu'il n'a pas été touché.
+d'avertissement, et sa ligne Traefik rend les deux dates qui permettent de s'y
+retrouver — `Created` (recréé ?) et `StartedAt` (redémarré depuis quand ?).
 
 ## Sauvegarde
 
@@ -337,7 +445,11 @@ somme fait les 77 contrôles du jeu. Un contrôle non jouable n'est pas un contr
 réussi : c'est la raison pour laquelle les trois exclus du compte de réussite sont
 écrits en toutes lettres dans `installation.md` — le chemin authentifié (il
 faudrait le mot de passe), le compte administrateur de Portainer (à créer à la
-main), et l'« Add host » de Dozzle (il se lit, ne se referme pas).
+main), et le réglage `canAddHosts` de Dozzle (il se lit à chaque passe, ne se
+commande pas). S'y ajoutent deux lignes **conditionnelles**, qui basculent selon
+l'heure et non selon une décision de conception : l'empreinte au sol
+(`docker stats`, seulement avec `--resources`) et la ligne Traefik, en non joué
+pendant les quinze minutes qui suivent un redémarrage de celui-ci.
 
 Une ligne `https://www.yabiladi.com/ → 000` en échec, elle, se lit avec son
 second nombre : si nginx répond `200` en direct sur la même ligne, le site est

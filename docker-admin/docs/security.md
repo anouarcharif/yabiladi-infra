@@ -93,9 +93,13 @@ plus solide n'est pas dans un fichier, c'est dans la page qu'il sert — le bloc
 ```
 "enableActions": false      → aucun bouton d'arrêt, de redémarrage ou de suppression
 "enableShell": false        → aucun terminal dans un conteneur
-"canAddHosts": true         → l'interface propose d'ajouter un hôte Docker
+"canAddHosts": true|false   → l'interface propose, ou non, d'ajouter un hôte Docker
 "hosts":[{"available":true}]  → le mandataire lui répond bien
 ```
+
+Les trois premières lignes sont lues dans la page servie ; `canAddHosts` est la
+seule des quatre dont la valeur ait bougé entre deux passes, d'où le `true|false`
+au lieu d'une promesse — voir plus bas.
 
 Les deux premiers réglages ne sont pas passés en ligne de commande (`--enable-actions`
 et `--enable-shell` absents du `command:`), et `--auto-update` comme
@@ -103,16 +107,21 @@ et `--enable-shell` absents du `command:`), et `--auto-update` comme
 mettrait à purger des images et à redéployer des conteneurs chaque nuit serait la
 pire des surprises.
 
-**« Add host » reste ouvert, et c'est à connaître.** Aucun réglage de l'image ne
-le ferme (il n'existe pas de drapeau, mesuré sur `--help` de v11.4.2). Ce n'est pas
-une main sur *cette* socket — le mandataire refuse tout ce qui écrit, tableau
-ci-dessus — mais c'est une sortie : un hôte ajouté serait joint par Dozzle depuis
-le réseau `yabiladi_app`, qui a une route vers l'extérieur. Deux portes restent
-devant ce geste, la plage d'adresses puis le compte. Le vérifier à chaque contrôle,
-et non pas le compter comme un succès, est le rôle de la ligne
-`Dozzle propose « Add host »…` en sortie de `validate.sh`. Si ce seuil devait
-gêner, la fermeture réelle passe par le réseau (ne pas laisser `yabiladi_app`
-sortir) et non par Dozzle.
+**« Add host » : la capacité se lit, elle ne se compte pas.** Aucun réglage de
+l'image ne la ferme (il n'existe pas de drapeau, mesuré sur `--help` de v11.4.2),
+et le champ `canAddHosts` rendu par la page n'est pas une constante : `true` sur
+deux démarrages distincts les 12 et 13 novembre, `false` le 15 novembre sur la même
+image `v11.4.2-alpine`, le même `command:` sans drapeau et le même `DOCKER_HOST`.
+C'est la valeur lue à la passe qui s'affiche, pas une promesse. Ce qui ne change
+pas entre les deux états, c'est la portée : ce n'est pas une main sur *cette*
+socket — le mandataire refuse tout ce qui écrit, tableau ci-dessus — mais c'est une
+sortie : un hôte ajouté serait joint par Dozzle depuis le réseau `yabiladi_app`,
+qui a une route vers l'extérieur. Deux portes restent devant ce geste, la plage
+d'adresses puis le compte. Le vérifier à chaque contrôle, et non pas le compter
+comme un succès, est le rôle de la ligne
+`Dozzle : réglage « canAddHosts » lu à …` en sortie de `validate.sh`. Si ce seuil
+devait gêner, la fermeture réelle passe par le réseau (ne pas laisser
+`yabiladi_app` sortir) et non par Dozzle.
 
 ## Chiffrement des archives : l'état réel de la console
 
