@@ -92,13 +92,6 @@ AGE_KEY="${AGE_KEY_FILE:-$HOME/.config/age/keys.txt}"
 n_bin=$(ls "$R_INFRA"/deploy/secrets/*.sops.bin 2>/dev/null | wc -l)
 [ "$n_bin" -gt 0 ] && ok "blocs scellés de l'infra" "$n_bin fichier(s)" \
     || bad "blocs scellés de l'infra" "aucun .sops.bin dans le clone — le pull n'est pas à jour"
-for k in "$R_INFRA/deploy/secrets/id_rsa_mariadb"; do
-    if [ -f "$k" ]; then
-        case "$(stat -c %a "$k")" in 600|400) ok "$k" "0600" ;; *) note "$k" "mode $(stat -c %a "$k") — ssh refuse au-dessus de 0600" ;; esac
-    else
-        note "$k" "absent — chaîne MariaDB éteinte de toute façon, mais le DAG la monte en :ro"
-    fi
-done
 
 # ------------------------------------------------- 2. les chemins et leurs droits
 hdr "2. Les chemins de la cible, tels que les .env versionnés les nomment"
@@ -107,17 +100,22 @@ check_path "$(env_val "$R_INFRA" LOGGING_HOST_DATA_PATH)/grafana" "472:472 750" 
 check_path "$(env_val "$R_INFRA" LOGGING_HOST_DATA_PATH)/prometheus" "65534:65534 750" "infra prepare_logging"
 check_path "$(env_val "$R_INFRA" DBACKUP_DEST_HOST_PATH)" "1001:33 750" "infra prepare_backups"
 check_path "$(env_val "$R_INFRA" DBACKUP_RESTORE_HOST_PATH)" "1001:33 750" "infra prepare_backups"
-check_path "$(env_val "$R_SITE" MARIADB_BACKUP_HOST_PATH)" "33:33 750" "site prepare_write_dirs"
 check_path "$(env_val "$R_SITE" RADIO_CONTENT_HOST_PATH)" "" "ni l'un ni l'autre : la discothèque vient du V1"
 check_path "$(env_val "$R_SITE" SITE_MEDIA_HOST_PATH)" "33:33 755" "site (monte public/files)"
 check_path "$(env_val "$R_SITE" SITE_EDITOR_IMAGES_HOST_PATH)" "33:33 755" "site (monte public/img)"
 check_path "$(env_val "$R_SITE" OPENDKIM_KEYS_DIR)" "" "site : l'entrypoint php copie les clés"
 check_path "$(env_val "$R_SITE" PRAYER_PDF_HOST_DIR)" "" "site : sous son propre clone par défaut"
+# L'index du moteur de recherche du forum : valeur par défaut relative au clone
+# du site, donc le « ./ » se résout ici — statuer sur le chemin tel quel
+# reviendrait à chercher un « ./data/manticore » relatif au dépôt d'infra, donc
+# à crier « absent » sur une cible correctement déployée. Les droits viennent du
+# conteneur du moteur, que compose.yaml démarre en 999:999.
+check_path "$(env_val "$R_SITE" MANTICORE_DATA_HOST_PATH | sed "s|^\./|$R_SITE/|")" "999:999 750" "site prepare_manticore_data"
 
-# Les quatre clés lues par deux projets : « le même » veut dire la même valeur
+# Les trois clés lues par deux projets : « le même » veut dire la même valeur
 # absolue, sinon un projet écrit dans un arbre et l'autre archive le voisin vide.
 hdr "3. Les valeurs partagées entre deux projets (divergence = archive vide annoncée « réussi »)"
-for cle in SITE_MEDIA_HOST_PATH SITE_EDITOR_IMAGES_HOST_PATH RADIO_CONTENT_HOST_PATH MARIADB_BACKUP_HOST_PATH; do
+for cle in SITE_MEDIA_HOST_PATH SITE_EDITOR_IMAGES_HOST_PATH RADIO_CONTENT_HOST_PATH; do
     a="$(env_val "$R_INFRA" "$cle")"; b="$(env_val "$R_SITE" "$cle")"
     [ -z "$a" ] && [ -z "$b" ] && continue
     if [ "$a" = "$b" ]; then ok "$cle" "$a"; else bad "$cle" "infra=« $a » site=« $b » — deux arbres différents, l'un sera archivé vide"; fi
@@ -182,20 +180,18 @@ for c in "$(env_val "$R_SITE" SITE_MEDIA_HOST_PATH)" "$(env_val "$R_SITE" SITE_E
 done
 cat <<'ARITH'
   Ce que les dépôts annoncent, à confronter aux chiffres ci-dessus :
-    repli MariaDB         28,52 GB de lignes quittent le serveur par nuit
-                            (mesure du 2026-11-13) ; l'archive compressée n'a
-                            pas encore de nuit mesurée — la peser au réveil,
-                            puis multiplier par 7 pour la rotation
+    dump de la base       28,52 Go de lignes quittaient le serveur par nuit
+                            (mesure du 2026-11-13 sur cinq schémas, chaîne
+                            retirée le 2026-11-14) ; les jobs « Database » qui
+                            la remplacent portent un périmètre plus large —
+                            49,6 Go dans les dix-sept schémas utilisateur — et
+                            n'ont pas encore de nuit mesurée
     archives              la SOMME des sources, une seconde fois (rétention
-                            7/4/12/2) — et le repli vit SOUS cette racine
-                            depuis le 2026-11-13, les deux comptes se tiennent
-                            sur le même disque
+                            7/4/12/2)
     atelier restauration  la plus grosse source seule (l'arbre média du V1)
     discothèque           ~9 Go de MP3 (infra/.env:132)
     fragments de prière   162 Mo mesurés, mais recréés par le DAG
 ARITH
-hote_db="$(grep -hE '^MARIADB_SSH_HOST=' "$R_SITE/docker/legacy/credentials.env" "$R_SITE/docker/legacy/credentials.env.example" 2>/dev/null | tail -1 | cut -d= -f2)"
-note "NFS commun ?" "à lever des deux côtés, même commande des deux machines : « findmnt -T $(env_val "$R_INFRA" DBACKUP_DEST_HOST_PATH) -no SOURCE,FSTYPE » ici, puis là-bas après « ssh ${MARIADB_SSH_USER:-backup_ssh}@${hote_db:-<serveur de base>} ». Un SOURCE identique veut dire que le repli du DAG et le dossier d'écriture de la base sont un seul répertoire : la reprise du DAG (« déjà présent », docker/dagu/dags/mariadb_fetch.yaml:402) validerait sans rien transférer, et les chmod du DAG s'exerceraient sur les originaux."
 
 # ------------------------------------------------------------------ 5. Docker
 hdr "5. Réseaux et volumes externes déclarés par les quatre projets"
@@ -245,4 +241,4 @@ if [ "$blocking" -gt 0 ]; then
 FIN
     exit 1
 fi
-echo "  Rien qui doive être réglé avant de jouer les quatre « ./deploy.sh », dans l'ordre : pile, puis les trois applications (le site en dernier rétablit 33:33 sur le repli MariaDB que la pile a pu balayer)."
+echo "  Rien qui doive être réglé avant de jouer les quatre « ./deploy.sh », dans l'ordre : pile, puis les trois applications (la pile crée les réseaux et volumes « external » que les applications déclarent, dont geoip_data)."

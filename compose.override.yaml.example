@@ -96,10 +96,6 @@ services:
       # Les dépôts voisins, à leur racine ; leurs jobs naissent désactivés.
       - <depot-mediakit>:/backup/mediakit:ro
       - <depot-facturation>:/backup/facturation:ro
-      # Dossiers de mariabackup : le DAG du site y écrit, le job « mariadb-physical »
-      # y lit. Valeur ABSOLUE et identique dans les deux dépôts — deux chemins
-      # relatifs semblables ne désignent pas le même dossier.
-      - <dossier-mariadb-backup>:/backup/mariadb-backups:ro
       # Discothèque des quatre antennes : le même arbre que celui que montent les
       # conteneurs radio du site.
       - <discotheque>:/backup/radio-content:ro

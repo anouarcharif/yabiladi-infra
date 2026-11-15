@@ -355,21 +355,13 @@ services:
       # tar puis chiffrer puis renommer sur place est coûteux ; le dossier
       # tampon reste donc dans un volume nommé (voir dbackup_tmp).
       TMPDIR: /tmp
-      # Accès à la base de production pour l'adaptateur « Base de données » de la
-      # console, déclaré avec les noms du dépôt (DB_DUMP_*) : mêmes variables,
-      # mêmes sources (.env versionné, .env.local sur la machine) que ce que
-      # lisait le DAG de dump SQL, donc rien à renseigner deux fois sur une
-      # machine.
-      # Depuis le 2026-11-09 la sauvegarde de la base n'est plus ce chemin :
-      # c'est mariabackup, piloté par le DAG Dagu « mariadb_fetch » côté site, et
-      # l'amorçage ne déclare plus d'adaptateur MariaDB. Ces variables restent
-      # pour un job SQL que la console créerait à la main depuis son interface —
-      # l'API ne sait pas le faire.
-      DB_DUMP_HOST: ${DB_DUMP_HOST:-}
-      DB_DUMP_PORT: "${DB_DUMP_PORT:-}"
-      DB_DUMP_USER: ${DB_DUMP_USER:-}
-      DB_DUMP_PASSWORD: ${DB_DUMP_PASSWORD:-}
-      DB_DUMP_DATABASES: ${DB_DUMP_DATABASES:-}
+      # Pas de variables de base ici : mesuré le 2026-11-14 dans l'image
+      # skyfay/dbackup:v4.0.2, « grep -rIo "DB_DUMP[A-Z_]*" /app /opt /usr/local »
+      # répond 0 occurrence — les « DB_DUMP_* » que ce service déclarait n'étaient
+      # lues par rien depuis que le DAG « mariadb_fetch » est supprimé, et
+      # l'adaptateur « MariaDB de production » garde sa configuration et son
+      # identifiant dans la console elle-même. Un job « Base de données » se
+      # règle donc dans « Jobs », sans passer par Compose.
       # PUID/PGID : la socket docker n'est pas montée (cf. plus haut), PUID reste
       # donc au défaut de l'image (1001). PGID prend 33 — celui de « www-data »,
       # l'utilisateur qui écrit les caches et les PDF dans les dossiers sauvegardés
@@ -483,17 +475,6 @@ services:
       # attachée. Pointer ici le dépôt du site archivait un dossier vide après le
       # « git mv », sans le dire — le job se signalerait « partiel » chaque nuit.
       - ./docker/traefik:/backup/traefik-config:ro
-      # Backups physiques MariaDB (mariabackup) : 60GB de données compressées en
-      # ~15GB. Le DAG Dagu « mariadb_fetch » (02:00) se connecte en SSH au serveur
-      # MariaDB, exécute mariabackup-daily.sh, et dépose les archives .zst dans ce
-      # dossier. DBackup les archive ensuite vers le NFS via le job « Fichiers -
-      # mariadb-physical » (04:28). Dossier partagé entre Dagu (écriture, dans LE
-      # DÉPÔT DU SITE — c'est son conteneur qui porte le DAG) et DBackup (lecture
-      # seule). D'où la valeur absolue du .env versionné des deux côtés : deux
-      # défauts relatifs identiques dans deux dépôts ne désignent pas le même
-      # dossier, et le job archivait un répertoire vide en se disant « réussi ».
-      # Configuration : voir scripts/backup/README.md.
-      - ${MARIADB_BACKUP_HOST_PATH:-/data/backup/files/mariadb}:/backup/mariadb-backups:ro
       # Discothèque des quatre antennes : les MP3 que lisent sc_trans et le
       # player. Comme les médias téléversés, rien ne la régénère — ni git, ni
       # les bases ; elle vient de l'arbre du V1. La variable est celle du
@@ -534,6 +515,22 @@ services:
       # docker-admin/scripts/backup.sh --grant-only, geste du « open_acme_to_backup
       # » ci-dessous appliqué à la donnée de l'autre pile.
       - portainer_data:/backup/portainer:ro
+      # Aucune source, aucun job pour l'index du moteur de recherche du forum —
+      # ce n'est pas un trou de la scission : ses fichiers sortent en 0600 et
+      # c'est le moteur qui impose ce mode (mesuré : un « touch » dans le même
+      # dossier rend 0644 sous le umask 0022 du conteneur), alors que la console
+      # relit en 1001:33. La monter produirait une archive vide annoncée
+      # « Success », exactement le piège où « Fichiers - grafana » est tombé avec
+      # son index bleve (écarté du périmètre le 2026-11-13, deux jours de
+      # « Success » menteurs avant la mesure).
+      #
+      # L'index, lui, n'est pas hors d'atteinte pour autant : depuis le
+      # 2026-11-14 il vit dans un dossier de l'hôte (« MANTICORE_DATA_HOST_PATH »
+      # du dépôt du site, posé en 999:999 par « prepare_manticore_data »), donc
+      # ni un « docker compose down -v » ni un « docker volume prune » joués
+      # projet arrêté ne le regardent. Ce qui reste à payer après une perte de
+      # machine, c'est le recalcul — 1 h 43 mesurée — et il part d'une table
+      # « phorum_messages » que ces jobs archivent déjà chaque nuit.
     ports:
       - "127.0.0.1:${DBACKUP_HTTP_PORT:-8087}:3000"
     healthcheck:

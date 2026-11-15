@@ -117,15 +117,33 @@ const NAMES = {
 // (« Partial ») ne disait pas lequel ; ici le nom du job est le dossier en échec.
 // Les dossiers sauvegardés sont ceux que compose.yaml monte en lecture seule
 // sous /backup (chacun y est commenté) : un montage sans job ici est un trou de
-// sauvegarde, pas un choix. Quatre absences sont délibérées. Celles de la console
+// sauvegarde, pas un choix. Cinq absences sont délibérées. Celles de la console
 // précédente : le volume « dagu_data » — Dagu y écrit en www-data des
 // répertoires 0750 et un « data/auth/encryption_key » en 0600, ni lisibles par
 // l'uid 1001 de la console, ni souhaitables dans une archive non chiffrée, alors
 // que les DAGs sont versionnés et l'historique d'exécution aussi dans Loki — et
 // « db-dumps », le dossier où le DAG « db_dump » écrivait ses dumps SQL, supprimé
-// le 2026-11-01 : la base physique se sauvegarde depuis par le DAG
-// « mariadb_fetch » (mariabackup sur le serveur) et le job
-// « Fichiers - mariadb-physical » qui archive le résultat sur le dépôt. Et deux
+// le 2026-11-01. La base ne figure plus dans ce périmètre depuis le 2026-11-14 :
+// la chaîne qui devait la couvrir — le DAG « mariadb_fetch » (mariabackup, puis
+// dump SQL sans verrou exécuté sur le serveur depuis le 2026-11-13) et le job
+// « Fichiers - mariadb-physical », qui en archivait le dépôt — est supprimée sans
+// avoir produit une seule archive, le passage des tables en InnoDB restant à
+// faire. Le montage « /backup/mariadb-backups », sa variable
+// « MARIADB_BACKUP_HOST_PATH » des deux « .env », les deux montages de dépose et
+// l'outil qui générait la clé SSH sont retirés le même jour : l'invariant du
+// début de ce paragraphe n'a plus d'exception — chaque montage sous « /backup »
+// a son job. Ce sont les jobs « Database » de la console qui devront la couvrir,
+// et ils ne se déclarent
+// pas ici : « --export » ne fait remonter que les jobs portant le préfixe
+// « Fichiers - ». Aucun n'est en place mesuré le 2026-11-14 : « --export »
+// énumère douze lignes dans l'instance vivante — dix « Fichiers - … »,
+// « portainer-volume-backup » et le job agrégé —, aucune ligne de job de base.
+// Il n'en reste que deux dépôts d'archives vides datés du 2026-11-13
+// (« Database-CAN », « database - mediakit ») sans ligne correspondante : ligne
+// supprimée depuis l'interface (les archives survivent, voir plus bas) ou
+// exécution n'ayant rien écrit — les deux laissent le même répertoire vide, et
+// rien ici ne les distingue. La base n'est donc backupée par rien tant que ces
+// jobs ne sont pas créés. L'amorçage ne les lit ni ne les écrit. Et deux
 // retirées le 2026-11-09, mesurées avant de l'être : « scripts » (748 fichiers
 // suivis dans git, dont les CSV du scraping — ce qui dépasse le dépôt n'est que
 // ses 38 « .log », ses caches que les DAGs réécrivent et ses vendor/), et
@@ -140,7 +158,11 @@ const NAMES = {
 // job orpheline donc ses archives aussi sûrement que le supprimer.
 //
 // « schedule » : quatre minutes d'écart, du plus lourd au plus léger, de 04:00
-// à 04:32. Les deux créneaux laissés libres le 2026-11-09 par le retrait des
+// à 04:28 (04:36 le dimanche pour « radio-content », 04:40 pour
+// « portainer-volume-backup »). Le créneau de 04:32, porté par
+// « Fichiers - mariadb-physical » jusqu'à sa suppression le 2026-11-14, est
+// libre — voir le paragraphe sur la base plus bas. Les deux créneaux laissés
+// libres le 2026-11-09 par le retrait des
 // jobs « scripts » et « prayer-pdfs » ont été reboutés, et l'instance en place a
 // été réalignée dans la foulée — l'amorçage, lui, ne touche jamais une
 // planification déjà créée (elle appartient à l'interface). Le créneau de 04:04,
@@ -157,11 +179,16 @@ const NAMES = {
 // l'interface : le décalage se décide dans « Jobs », job par job. Un écartement
 // ne sérialise rien — « media » court encore quand le suivant démarre —, il
 // baisse seulement le pic de lectures simultanées sur le NFS de destination. Le
-// « créneau du dump SQL » invoqué ici jusqu'au 2026-11-09 n'existe plus : la
-// base part à 02:00 par le DAG « mariadb_fetch », avant toute la série, et son
-// archivage la ferme. Mesuré sur le poste de développement, donc sans valeur de
-// débit : la cible a 16 cœurs et lit la MariaDB à distance, les durées réelles
-// se liront sur le serveur.
+// « créneau du dump SQL » invoqué ici jusqu'au 2026-11-09, jour où le job
+// « Base de données de production » de la console a cédé la place à une chaîne
+// mariabackup pilotée par Dagu ; cette chaîne (DAG « mariadb_fetch », qui avait
+// depuis le 2026-11-13 basculé sur un dump SQL sans verrou, et le job
+// « Fichiers - mariadb-physical » qui en archivait le dépôt) est supprimée le
+// 2026-11-14 sans avoir produit une archive. La base revient donc dans la
+// console elle-même, en jobs « Database » dont les horaires se règlent dans
+// « Jobs » — hors de ce fichier de déclaration. Mesuré sur
+// le poste de développement, donc sans valeur de débit : la cible a 16 cœurs et
+// lit la MariaDB à distance, les durées réelles se liront sur le serveur.
 // Le périmètre lui-même est dans « tools/backup/jobs.json » : une ligne par
 // job, les mêmes quatre champs (name, path, label, schedule) et « enabled »
 // seulement quand il vaut false. Ce fichier est la déclaration, pas un
@@ -175,15 +202,21 @@ const FILE_JOBS = JSON.parse(readFileSync(new URL("./jobs.json", import.meta.url
 //   - « traefik-acme » : le montage du volume est « docker/traefik-acme », mais
 //     le nom du job ne prend pas de barre oblique — ce serait un sous-dossier
 //     sur le dépôt, donc une seconde arborescence d'archives ;
-//   - les quatre jobs marqués « enabled: false » (mediakit-img,
-//     facturation-uploads, facturation-bc, mariadb-physical) naissent éteints :
-//     les trois applications voisines ne sont pas encore servies et la MariaDB
-//     n'a pas encore son mariabackup. Le job existe pour que la bascule ne soit
-//     qu'un bouton — le jour J, on l'active depuis « Jobs » après y avoir
-//     associé un profil de chiffrement (l'API ne sait pas créer la clé).
+//   - mediakit-img, facturation-uploads et facturation-bc doivent naître
+//     éteints : les trois applications voisines ne sont pas encore servies. Le
+//     job existe pour que la bascule ne soit qu'un bouton — le jour J, on
+//     l'active depuis « Jobs » après y avoir associé un profil de chiffrement
+//     (l'API ne sait pas créer la clé).
 //     L'amorçage, lui, ne rallume jamais un job existant : c'est pour cela que
-//     l'état de départ est déclaré ici plutôt qu'obtenu par une action manuelle,
-//     et depuis l'export c'est l'interface qui tient le drapeau ;
+//     l'état de départ est déclaré ici plutôt qu'obtenu par une action manuelle.
+//     Mais cette déclaration ne porte plus le drapeau, mesuré le 2026-11-14 :
+//     aucune des dix lignes de « jobs.json » n'a de champ « enabled », alors que
+//     l'instance en rend neuf éteints. Or « dossier.enabled ?? true » plus bas
+//     allume ce qui n'est pas déclaré : sur une machine neuve, ces trois jobs
+//     seraient créés ACTIVÉS et archiveraient des montages vides en disant
+//     « Success ». À trancher hors de ce fichier — rendre les trois
+//     « "enabled": false », ou accepter l'activation. Un « --export » qui aurait
+//     lu l'instance les aurait pourtant écrits.
 //   - « facturation-uploads » et « facturation-bc » sont deux jobs et non un :
 //     « public/uploads » couvre les documents de projets et les images des
 //     incidents, « var/bc_files » porte les bons de commande téléversés. Deux
@@ -191,7 +224,7 @@ const FILE_JOBS = JSON.parse(readFileSync(new URL("./jobs.json", import.meta.url
 //     se lire comme une pièce jointe manquante. Le second suit le défaut de
 //     BC_PATH (%kernel.project_dir%/var/bc_files) ; un chemin absolu sur le
 //     serveur demanderait son propre montage ;
-//   - « radio-content » est activé d'emblée, contrairement aux quatre jobs en
+//   - « radio-content » est activé d'emblée, contrairement aux trois jobs en
 //     attente d'à côté : 9 Go mesurés sur le poste de développement, et c'est
 //     du contenu qui ne se régénère pas — ni dans git, ni dans les bases. GZIP
 //     sur des MP3 ne gagne presque rien, mais c'est le défaut de la maison et le

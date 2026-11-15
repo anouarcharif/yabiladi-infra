@@ -397,22 +397,22 @@ prepare_backups() {
         MINGW* | MSYS*) return 0 ;;
     esac
 
-    # Les trois chemins où la sauvegarde écrit portent, dans le .env versionné, un
-    # défaut de poste de travail : « ./backup/archives », « ./backup/restore »,
-    # « ./backup/mariadb ». Sur une machine, la valeur vient de .env.local — le
+    # Les deux chemins où la sauvegarde écrit portent, dans le .env versionné, un
+    # défaut de poste de travail : « ./backup/archives », « ./backup/restore ».
+    # Sur une machine, la valeur vient de .env.local — le
     # fichier propre à la machine, déchiffré du coffre — et rien, jusqu'ici, n'y
-    # déclarait ces clés : une machine neuve écrivait donc ses archives, son
-    # atelier de restauration et ses 15 Go de mariabackup sur le disque de
+    # déclarait ces clés : une machine neuve écrivait donc ses archives et son
+    # atelier de restauration sur le disque de
     # l'application, dans un dossier du dépôt. La destination des archives tue :
     # la déplacer après coup orpheline ses chaînes, la rétention étant attachée au
-    # job et au dossier. Les deux ateliers préviennent seulement — un dépôt
+    # job et au dossier. Les ateliers préviennent seulement — un dépôt
     # deploy.sh ne doit pas se refuser pour un disque un peu juste.
     #
     # Depuis la séparation, « le dépôt » est celui de l'infrastructure : le garde
     # ne protège plus le code du site, mais la règle reste la même — une archive
     # ne se range pas dans un dépôt.
     local cle valeur cible
-    for cle in DBACKUP_DEST_HOST_PATH DBACKUP_RESTORE_HOST_PATH MARIADB_BACKUP_HOST_PATH; do
+    for cle in DBACKUP_DEST_HOST_PATH DBACKUP_RESTORE_HOST_PATH; do
         valeur="$(compose_value "$cle" "")"
         case "$valeur" in
             /*) cible="$valeur" ;;
