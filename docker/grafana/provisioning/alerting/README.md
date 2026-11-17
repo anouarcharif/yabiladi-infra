@@ -236,7 +236,8 @@ ont été jouées le 2026-11-17 avec 33 messages volontairement bloqués derriè
 être provoquée : ce qu'elle compare est du temps écoulé, et le lire à l'avance
 voudrait dire écrire un `delay=` que le message n'a pas vécu. Elle est donc
 jouée en vrai, à l'horloge de la file, valeur relevée chaque minute (599 s à
-16:49, 1199 s à 16:53).
+16:49, 1199 s à 16:53, 2399 s à 17:11). Le franchissement de 3600 s tombe donc
+à la tentative suivante, une quarantaine de minutes après la ligne à 2399.
 
 Ce que la file doit à ce dosage : `queue_run_delay` et
 `minimal_backoff_time` valent 300 s, `maximal_backoff_time` 4000 s. L'intervalle
@@ -252,6 +253,24 @@ c'est le seul âge lisible dans les journaux. La profondeur brute de file ne
 l'est pas : `docker compose exec postfix postqueue -p`, où « N Requests » donne
 le nombre réel de messages. Et une ligne n'est pas un message : une tentative
 écrit une ligne par destinataire.
+
+# La règle de volume se tait pendant que l'encombrement dure
+
+Mesuré le 2026-11-17 à 17:13 sur l'engorgement volontaire des 33 messages : la
+file répond encore `-- 8 Kbytes in 33 Requests`, mais
+`sum(count_over_time({service="postfix"} |= "status=deferred" [15m]))` ne rend
+plus que **3** (et 107 sur `[60m]`). La raison est le dosage ci-dessus : le
+nombre de messages ne change pas, le nombre de LIGNES par quart d'heure fond à
+mesure que le backoff s'étire. Le seuil de 30 en quinze minutes est donc un
+**détecteur de rafale** — il a sonné de 16:39 à ~17:00, puis s'est éteint sur
+un bourbier intact.
+
+Ce n'est pas un trou de couverture : c'est précisément le relais que prend
+`email-defere-age`, qui ne regarde pas combien de lignes sortent mais combien le
+doyen a attendu. Les deux ensemble disent « ça arrive » puis « ça dure ». Un
+troisième signal — la profondeur brute — n'existe dans aucun journal : il
+faudrait un exporteur qui interroge `postqueue`, et la règle d'âge couvre déjà
+le cas sans machine de plus.
 
 # Ce répertoire n'est pas le seul endroit où l'alerting vit
 
