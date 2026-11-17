@@ -236,15 +236,21 @@ ont été jouées le 2026-11-17 avec 33 messages volontairement bloqués derriè
 être provoquée : ce qu'elle compare est du temps écoulé, et le lire à l'avance
 voudrait dire écrire un `delay=` que le message n'a pas vécu. Elle est donc
 jouée en vrai, à l'horloge de la file, valeur relevée chaque minute (599 s à
-16:49, 1199 s à 16:53, 2399 s à 17:11). Le franchissement de 3600 s tombe donc
-à la tentative suivante, une quarantaine de minutes après la ligne à 2399.
+16:49, 1199 s à 16:53, 2399 s à 17:11). Le franchissement est tombé à la
+tentative suivante, et il est mesuré : ligne `delay=5066` à 17:55:04, règle
+`email-defere-age` passée `firing` à 17:55:30Z sur cette même valeur, visible
+dans l'API alertmanager sous `severity=critical`, « Emails — un message attend
+sa remise depuis plus d'une heure ». Seule l'arrivée du courriel dans la boîte
+n'est pas observée d'ici (Grafana classe un échec SMTP en « unrecoverable » et
+ne réessaie pas).
 
 Ce que la file doit à ce dosage : `queue_run_delay` et
 `minimal_backoff_time` valent 300 s, `maximal_backoff_time` 4000 s. L'intervalle
-entre deux tentatives d'un même message double donc (300, 600, 1200, 2400,
-4000 puis 4000…), ce qui explique qu'un message de dix minutes soit déjà à
-`delay=599` mais qu'il faille une heure de temps réel pour que sa ligne déclare
-plus de 3600 s. La fenêtre de la règle d'âge est de 75 min — plus que le plus grand
+entre deux tentatives d'un même message s'étire donc à peu près par doublements —
+mesuré sur le doyen : `delay=` 599, 1199, 2399 puis 5066, soit des écarts de 600,
+1200 et 2667 s, pas 2400 et 4000 — ce qui explique qu'un message de dix minutes
+soit déjà à `delay=599` mais qu'il faille une heure de temps réel pour que sa
+ligne déclare plus de 3600 s. La fenêtre de la règle d'âge est de 75 min — plus que le plus grand
 écart possible entre deux lignes — pour qu'une file muette ne se déclare pas
 saine entre deux tentatives.
 
@@ -271,6 +277,34 @@ doyen a attendu. Les deux ensemble disent « ça arrive » puis « ça dure ». 
 troisième signal — la profondeur brute — n'existe dans aucun journal : il
 faudrait un exporteur qui interroge `postqueue`, et la règle d'âge couvre déjà
 le cas sans machine de plus.
+
+# Vider la file ne fait pas taire la règle d'âge
+
+`email-defere-age` ne lit pas la file, elle lit les LIGNES des 75 dernières
+minutes. Le bourbier a donc été nettoyé à 17:56:20 (`postsuper -d ALL deferred`,
+« Deleted: 34 messages », puis `postconf -X relayhost` et `postqueue -p` = « Mail
+queue is empty ») sans que la règle s'éteigne : ses lignes à `delay=5066`
+restent dans la fenêtre jusqu'à ~19:10Z. C'est le comportement voulu — une alerte
+qui s'efface dès le premier geste d'exploitation cache l'incident en cours — mais
+il faut le savoir avant de conclure « le nettoyage n'a rien donné ». Le témoin
+de la file, lui, est immédiat : `postqueue -p`.
+
+# Une ligne « fatal: » de n'importe quel client postfix fait sonner la règle de crash
+
+`container-postfix-crash` cherche `(fatal:|panic:|abnormal exit|core dumped)`
+dans tout le flux `service="postfix"`, sans distinguer qui écrit. Mesuré le
+2026-11-17 à 17:53:10Z : la règle est passée `active` sur une ligne écrite par
+mon propre `postsuper -d <id> <id>` mal formé —
+`postfix/postsuper[…]: postsuper: fatal: invalid directory name: 8C223AD06` —
+tandis que le conteneur restait `healthy` et que le démon ne s'était jamais tu.
+L'alerte s'éteint seule quand la ligne sort de la fenêtre de 10 min : `endsAt`
+18:01:10Z mesuré pour un `startsAt` de 17:53:10Z, aucune intervention.
+
+À trancher plutôt qu'à corriger à l'aveugle. Laisser le motif tel quel : toute
+fausse manœuvre dans le conteneur est signalée, et c'est un geste rare. Le
+restreindre aux processus du démon (`postfix/master[`, `postfix/qmgr[`,
+`postfix/smtp[`, `opendkim[`) : plus de bruit d'opérateur, mais un vrai crash
+écrit par un sous-processus au nom inattendu devient invisible.
 
 # Ce répertoire n'est pas le seul endroit où l'alerting vit
 
