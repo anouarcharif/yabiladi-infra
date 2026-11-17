@@ -1,6 +1,12 @@
 # Gabarit rendu au démarrage (entrypoint.sh) : seule ${POSTFIX_MYHOSTNAME} est
 # substituée. Les $variables restantes sont celles de Postfix.
 #
+# Ce fichier EST la configuration du conteneur à chaque démarrage : une valeur
+# posée à la main par « postconf -e » pendant un debug (relayhost, un seuil) est
+# effacée par le prochain « docker compose up -d » ou un restart. Mesuré le
+# 2026-11-17. Ce qui doit durer se déclare ici (et se commit) ou passe par une
+# variable d'environnement, jamais par « postconf -e » en running.
+#
 # Rôle : relais SMTP sortant pour php, dagu, grafana, facturation, mediakit et
 # pour les machines déclarées dans POSTFIX_RELAY_NETWORKS. Aucune boîte locale
 # n'existe (mydestination vide), aucune authentification n'existe : le

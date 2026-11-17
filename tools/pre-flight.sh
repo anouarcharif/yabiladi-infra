@@ -127,7 +127,22 @@ fi
 pub="$(env_val "$R_INFRA" POSTFIX_PUBLISH_ADDRESS)"
 case "$pub" in
     ""|127.0.0.1|localhost) note "POSTFIX_PUBLISH_ADDRESS" "« ${pub:-non déclaré} » : le 25 ne s'entend que sur cette machine, le V1 de tarourt n'aura aucun relais où soumettre" ;;
-    *) ok "POSTFIX_PUBLISH_ADDRESS" "$pub" ;;
+    0.0.0.0) note "POSTFIX_PUBLISH_ADDRESS" "0.0.0.0 : le 25 s'entend sur toutes les interfaces de la machine, pas seulement l'IP visée" ;;
+    *)  # Écrire la valeur ne suffit pas : il faut que la machine la PORTE. Une
+        # IP qui n'est celle d'aucune interface fait échouer « up -d » sur
+        # « cannot assign requested address » — le relais n'a alors aucun port
+        # 25, et tarourt, dont le Postfix Debian est retiré, ne remet plus rien.
+        # « ip » n'existe pas sur un poste Windows : la ligne rend alors ce qui
+        # est lu, pas une promesse.
+        if command -v ip >/dev/null 2>&1; then
+            if ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qx "$pub"; then
+                ok "POSTFIX_PUBLISH_ADDRESS" "$pub, adresse portée par une interface de cette machine"
+            else
+                bad "POSTFIX_PUBLISH_ADDRESS" "$pub n'est l'adresse d'aucune interface d'ici — le « up -d » du postfix refusera de publier le 25"
+            fi
+        else
+            note "POSTFIX_PUBLISH_ADDRESS" "$pub — à confronter aux interfaces de la cible (« ip -4 addr show »), commande absente sur ce poste"
+        fi ;;
 esac
 note "POSTFIX_RELAY_NETWORKS" "$(env_val "$R_INFRA" POSTFIX_RELAY_NETWORKS | sed 's/^$/non déclaré — seuls les réseaux des interfaces du conteneur soumettent/')"
 check_path "$(env_val "$R_SITE" PRAYER_PDF_HOST_DIR)" "" "site : sous son propre clone par défaut"
