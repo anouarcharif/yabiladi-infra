@@ -18,8 +18,9 @@
 #   verify       round-trip octet pour octet, sans jamais écrire le clair
 #   status       ce qui est chiffré, ce qui manque — sans ouvrir les valeurs
 #
-# Une seule table (deploy/secrets.manifest) pour les quatre projets de la pile,
-# et une colonne 8 qui dit à qui appartient chaque entrée : c'est le filtre de ce
+# Une seule table (deploy/secrets.manifest) pour les cinq projets de la pile
+# (infra, site, facturation, mediakit, radio), et une colonne 8 qui dit à qui
+# appartient chaque entrée : c'est le filtre de ce
 # script. Voir les commentaires de la colonne 8 dans le manifeste pour le pourquoi
 # — un deploy.sh ne déchiffre jamais le secret d'un autre dépôt.
 set -euo pipefail
@@ -33,6 +34,7 @@ MANIFEST=deploy/secrets.manifest
 #   TARGET_PROJECT=site
 #   TARGET_PROJECT=facturation
 #   TARGET_PROJECT=mediakit
+#   TARGET_PROJECT=radio       (dépôt Yabiladi-Radio-V2, les quatre antennes)
 TARGET_PROJECT="${TARGET_PROJECT:-infra}"
 
 # Racine du dépôt cible DANS le conteneur. L'appelant monte le dépôt du projet en
@@ -52,7 +54,7 @@ Usage: deploy/secrets.sh <encrypt|materialize|verify|status>   (dans le conteneu
   verify       contrôle que ce qui sort du coffre est identique octet pour octet au clair
   status       liste l'état des deux côtés, sans ouvrir les valeurs
 
-  TARGET_PROJECT=<infra|site|facturation|mediakit>  projet dont on traite les
+  TARGET_PROJECT=<infra|site|facturation|mediakit|radio>  projet dont on traite les
   secrets ; défaut « infra ». Les lignes du manifeste dont la colonne 8 porte un
   autre nom ne sont ni relues ni écrites (sauf au verbe « status », qui les montre).
 

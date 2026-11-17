@@ -20,6 +20,14 @@
 deploy/secrets/*.sops.bin -text -diff -merge
 deploy/secrets/*.sops.env -text -diff -merge
 
+# Le 2026-11-17, la coupe du bloc « site » en « site » + « radio » a laissé une
+# copie du blob d'avant, seul moyen de revenir en arrière. Elle est dans un
+# sous-dossier et son nom ne finit plus en « .sops.bin » : la règle ci-dessus ne
+# la couvre donc pas, et « core.autocrlf=true » y graverait des CRLF comme sur
+# n'importe quel fichier laissé sans règle — un blob de sauvegarde qui ne se
+# déchiffre plus n'est plus une sauvegarde.
+deploy/secrets/backup-*/*.sops.bin* -text -diff -merge
+
 # Les scripts que lit un conteneur (ou Git Bash) partent en LF.
 #
 # Mesuré le 2026-11-11 sur le dépôt du site, le même réglage système
