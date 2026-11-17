@@ -1,9 +1,10 @@
 # Gabarit rendu au démarrage (entrypoint.sh) : seule ${POSTFIX_MYHOSTNAME} est
 # substituée. Les $variables restantes sont celles de Postfix.
 #
-# Rôle : relais SMTP sortant pour php/dagu. Aucun port n'est publié, aucune
-# authentification n'existe, aucun mail entrant n'est accepté (mydestination
-# vide) : le conteneur ne fait que remettre les messages aux MX destinataires.
+# Rôle : relais SMTP sortant pour php, dagu, grafana, facturation, mediakit et
+# pour les machines déclarées dans POSTFIX_RELAY_NETWORKS. Aucune boîte locale
+# n'existe (mydestination vide), aucune authentification n'existe : le
+# conteneur ne fait que remettre les messages aux MX destinataires.
 compatibility_level = 3.6
 myhostname = ${POSTFIX_MYHOSTNAME}
 mydomain = yabiladi.com
@@ -15,8 +16,22 @@ inet_interfaces = all
 # Le SPF ne publie que des ip4 : sortir en IPv6 ferait échouer SPF sur les
 # serveurs qui n'ont pas de PTR v6.
 inet_protocols = ipv4
-# Tout conteneur du réseau « app » (php, dagu) peut relayer ; le réseau n'est
-# pas exposé hors du démon Docker.
+
+# Pas de smtp_bind_address : le conteneur est sur le réseau bridge de Docker et
+# ne possède aucune IP publique dans sa namespace — lier 57.128.22.216 ferait
+# échouer chaque remise (« cannot assign requested address »). L'adresse source
+# est donc choisie par la machine hôte, ce qui est précisément le but de poser
+# ce relais sur imouzzer : l'IP primaire de cette machine est 57.128.22.216,
+# son PTR est imouzzer.yabiladi.com, et le HELO ci-dessus est ce même nom.
+# Le contrôle se joue à la première remise réelle : la ligne de refus d'un
+# destinataire cite l'IP qu'il a vue, elle doit être .216.
+
+# Les clients autorisés sont calculés au démarrage : les sous-réseaux des
+# interfaces du conteneur (127.0.0.0/8 et le réseau « app », donc php, dagu,
+# grafana, facturation, mediakit) plus POSTFIX_RELAY_NETWORKS — les machines
+# d'où le courrier legacy est soumis depuis que leur propre Postfix est retiré.
+# « subnet » reste la source de la première partie ; mynetworks est posé par
+# l'entrypoint, qui ne peut pas deviner le CIDR de la machine.
 mynetworks_style = subnet
 
 smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
@@ -31,6 +46,14 @@ smtp_tls_security_level = may
 smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
 smtp_tls_loglevel = 1
 
+# Rien n'est livré en local : les notifications « resource » et « software »
+# du démon seraient acceptées faute de boîte, puis rebondies. Les journaux du
+# conteneur et les alertes Grafana les remplacent.
+notify_classes =
+
+# smtpd_milters et non_smtpd_milters ne sont posés par entrypoint.sh que quand
+# la clé DKIM est présente (voir opendkim.conf) : sans eux, le courrier soumis
+# par un tiers (le V1, les shells de l'hôte) partirait non signé.
 maillog_file = /dev/stdout
 message_size_limit = 26214400
 biff = no

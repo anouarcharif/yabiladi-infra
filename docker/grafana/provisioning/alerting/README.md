@@ -75,11 +75,42 @@ Réglé dans `compose.yaml` (bloc `grafana.environment`). Sans lui, Grafana
 enregistre la notification, l'affiche dans son interface et n'envoie rien : le
 provisioning réussit, aucune erreur nulle part. Le transport est Resend via son
 relais SMTP authentifié (`smtp.resend.com:587`), sur le serveur comme sur un
-poste de développement : une alerte testée ici part donc réellement. Le mot de
+poste de développement : une alerte testée ici part donc réellement — à
+condition que la connexion aboutisse, voir la section suivante. Le mot de
 passe est dérivé par `deploy.sh` depuis `BOT_MONITOR_MAILER_DSN` (coffre SOPS)
 et monté en secret Docker (`/run/secrets/grafana_smtp_password`). Pour rendre
 une notification muette le temps d'un essai, couper `GF_SMTP_ENABLED` plutôt
 que de changer d'hôte.
+
+# Une notification dont le transport échoue n'est pas rejouée
+
+Mesuré le 2026-11-17 sur le poste de développement, à propos d'une alerte
+d'antenne passée en `firing` à 16:58:40 :
+
+```
+logger=ngalert.notifier level=warn component=alertmanager
+msg="Notify for alerts failed" num_alerts=1
+err="yabiladi-radio-alertes/email[0]: notify retry canceled due to
+     unrecoverable error after 1 attempts: failed to send email:
+     dial tcp: lookup smtp.resend.com on 127.0.0.11:53: server misbehaving"
+```
+
+Ce que ce relevé veut dire, dans l'ordre :
+
+- la résolution DNS de Docker (127.0.0.11) peut répondre SERVFAIL une fois sur
+  deux ; la même requête rejouée trente secondes plus tard rendait les adresses
+  publiques et `nc -zv smtp.resend.com 587` passait. La panne est l'instant,
+  pas la configuration.
+- Grafana classe l'échec de connexion en « unrecoverable » et **n'essaie
+  qu'une fois** : ni reprise au cycle suivant, ni dans les quatre heures du
+  `repeat_interval`. L'alerte reste active chez Alertmanager et visible dans
+  l'interface, mais le courriel, lui, n'existe plus.
+- Donc l'absence de courriel ne prouve pas l'absence d'alerte. Pour savoir si
+  une alerte a bien eu lieu, la lecture authoritative est l'API, pas la boîte
+  de réception : `/api/prometheus/grafana/api/v1/rules` (état et santé de
+  chaque évaluation) et `/api/annotations?limit=25&type=alert` (les transitions
+  horodatées). Les journaux de `grafana` ne disent rien quand tout va bien, et
+  disent ce qui ci-dessus quand le transport casse.
 
 # Une clef mal nommée = règle silencieusement inactive
 
@@ -148,13 +179,42 @@ redémarrage de Grafana, sans intervention sur la base SQLite.
 curl -s -X POST -u "$usager:$motdepasse" http://127.0.0.1:8088/api/admin/provisioning/alerting/reload
 # ce qui est réellement provisionné
 … /api/v1/provisioning/contact-points | … /api/v1/provisioning/policies | … /api/v1/provisioning/alert-rules
-# états et santé de chaque évaluation (le seul endroit où l'on voit Error/NoData)
+# états et santé de chaque évaluation : SEUL endroit où l'on voit Error/NoData
+… /api/prometheus/grafana/api/v1/rules
+# la déclaration provisionnée (expr, seuils, no_data_state) — sans AUCUN état
 … /api/ruler/grafana/api/v1/rules
 # ce que l'alertmanager retient comme en cours
 … /api/alertmanager/grafana/api/v2/alerts
 # les transitions d'état, dans l'ordre
 … '/api/annotations?limit=25&type=alert'
 ```
+
+Mesuré le 2026-11-17 sur grafana/grafana:13.3.0, parce que les deux URL se
+ressemblent et ne rendent pas la même chose :
+
+- `/api/ruler/grafana/api/v1/rules` répond 200 mais ne contient que la
+  DÉCLARATION (`expr`, `for`, `labels`, `grafana_alert.condition`,
+  `no_data_state`, `provenance`). Les clefs d'une règle sont
+  `expr,for,keep_firing_for,labels,annotations,grafana_alert` : ni `state`, ni
+  `health`, ni `currentValue`. On ne peut donc pas y lire si une règle sonne.
+- La variante par dossier, `/api/ruler/grafana/api/v1/rules/Applications`,
+  répond `403 {"message":"Access denied"}` avec les mêmes droits que la liste
+  non filtrée — ce n'est pas un problème de rôle, ne pas perdre de temps à
+  changer d'usager.
+- `/api/prometheus/grafana/api/v1/rules` est celui qui rend `state`
+  (`inactive`, `pending`, `firing`), `health`, `lastEvaluation`,
+  `evaluationTime` et `alerts[]` par règle. C'est la lecture à câbler dans une
+  sonde.
+- Une règle provisionnée par fichier mais absente de ces deux dernières URL est
+  une règle que Grafana n'évalue pas : le provisioning a pu accepter le
+  fichier, l'évaluation est un autre étage.
+- Rejouer l'EXPRESSION d'une règle par `POST /api/ds/query` (le chemin de
+  `tools/logging/validate-dashboards.js`) reste nécessaire : un `inactive` ne
+  dit pas si la requête rend une valeur sous le seuil ou AUCUNE série. Les deux
+  concluent « rien à signaler », seul le second est faux. En Arrow, une frame
+  porte `values[0]` = horodatages en millisecondes et `values[1]` = la mesure ;
+  lire le premier fait afficher `1794934364879` au lieu de `599` (mesuré ici le
+  2026-11-17 sur la règle d'âge de la file).
 
 Côté courriel, sur le poste de développement comme sur le serveur : `docker
 compose logs --tail=100 postfix` doit montrer la remise (`status=sent`) du
@@ -165,6 +225,33 @@ Une notification n'arrive pas dans la seconde : `group_wait` attend
 30 s (critique) ou 1 min (avertissement) après le passage en `Alerting`, et le
 retard propre de la règle s'ajoute — les règles de battement prennent
 15 min sans ligne plus 5 min de `for:` avant d'écrire quoi que ce soit.
+
+# Les deux règles « file différée » et leur fenêtre de 75 min
+
+`email-defere-volume` et `email-defere-age` comptent les lignes
+`status=deferred`, c'est-à-dire les remises QUE Postfix réessaie encore. Elles
+ont été jouées le 2026-11-17 avec 33 messages volontairement bloqués derrière un
+`relayhost` inexistant : la règle de volume est passée `firing` (annotation à
+16:39:30 puis 16:44:30, `for: 5m` honoré). La règle d'âge, elle, ne peut pas
+être provoquée : ce qu'elle compare est du temps écoulé, et le lire à l'avance
+voudrait dire écrire un `delay=` que le message n'a pas vécu. Elle est donc
+jouée en vrai, à l'horloge de la file, valeur relevée chaque minute (599 s à
+16:49, 1199 s à 16:53).
+
+Ce que la file doit à ce dosage : `queue_run_delay` et
+`minimal_backoff_time` valent 300 s, `maximal_backoff_time` 4000 s. L'intervalle
+entre deux tentatives d'un même message double donc (300, 600, 1200, 2400,
+4000 puis 4000…), ce qui explique qu'un message de dix minutes soit déjà à
+`delay=599` mais qu'il faille une heure de temps réel pour que sa ligne déclare
+plus de 3600 s. La fenêtre de la règle d'âge est de 75 min — plus que le plus grand
+écart possible entre deux lignes — pour qu'une file muette ne se déclare pas
+saine entre deux tentatives.
+
+Le champ `delay=` est l'âge CUMULÉ du message depuis son arrivée en secondes ;
+c'est le seul âge lisible dans les journaux. La profondeur brute de file ne
+l'est pas : `docker compose exec postfix postqueue -p`, où « N Requests » donne
+le nombre réel de messages. Et une ligne n'est pas un message : une tentative
+écrit une ligne par destinataire.
 
 # Ce répertoire n'est pas le seul endroit où l'alerting vit
 

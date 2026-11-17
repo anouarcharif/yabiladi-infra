@@ -260,7 +260,8 @@ cat <<'PORT25'
   Le 25 mérite son attention : une distribution installe son Postfix dessus sans
   qu'on le lui demande, et le « up -d » de l'infrastructure meurt alors sur
   « port is already allocated ». Sur la machine du conteneur, le démon local ne
-  doit donc pas écouter (voir RUNBOOK de la bascule mail) : un courrier qui
+  doit donc pas écouter (la procédure est au §6.1 « Retirer Postfix de tarourt »
+  de Yabiladi-V2-Symfony/to-do-going-live.md) : un courrier qui
   partirait par lui sortirait sans la clé montée dans le conteneur, donc non
   signé, donc en spam sous le « p=quarantine » du domaine.
 PORT25

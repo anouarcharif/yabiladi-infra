@@ -831,7 +831,7 @@ checks_infra() {
     #     « p=quarantine pct=100 » : le courrier part en spam sans que Postfix ne
     #     le dise. « broken » veut de plus dire que le conteneur est unhealthy.
     #   - le 25 publié en boucle locale sur la cible = rien d'extérieur
-    #     n'atteint le relais, et le V1 de l'autre machine na plus de sortie.
+    #     n'atteint le relais, et le V1 de l'autre machine n'a plus de sortie.
     #   - un nombre qui ne descend pas entre deux déploiements veut dire que le
     #     destinataire refuse (SPF, DMARC, quota, HELO ≠ PTR).
     state=$(docker compose exec -T postfix cat /run/opendkim.state 2>/dev/null || echo 'illisible')
@@ -856,9 +856,14 @@ checks_infra() {
     res=$(docker compose exec -T postfix postqueue -p 2>/dev/null \
               | awk 'NR>1 && /^[0-9A-F][0-9A-F]*/ {n++} END {print n+0}' || true)
     log "  postfix        → ${res:-illisible} message(s) en file d'attente"
+    # Le motif « status=deferred » est celui des JOURNAUX, pas de « postqueue -p » :
+    # mesuré le 2026-11-17 avec 33 messages volontairement bloqués, ce grep rendait
+    # 0 et la ligne se disait verte. Une remise en attente se reconnaît ici à la
+    # ligne de motif qui précède le destinataire — 33 messages, 33 lignes de motif,
+    # comptées par le même « grep -c "^ *(" ».
     deferred=$(docker compose exec -T postfix postqueue -p 2>/dev/null \
-                   | grep -c 'status=deferred' || true)
-    [ "${deferred:-0}" = "0" ] || log "  postfix        → attention : $deferred message(s) en status=deferred (destinataire injoignable ou refus ; voir « docker compose logs postfix »)"
+                   | grep -c '^ *(' || true)
+    [ "${deferred:-0}" = "0" ] || log "  postfix        → attention : $deferred remise(s) en attente (la ligne « (…raison…) » du nom de file dit pourquoi ; les tentatives différées sont dans « docker compose logs postfix »)"
 }
 
 # --- Points d'entrée ---------------------------------------------------------

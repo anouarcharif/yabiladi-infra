@@ -28,11 +28,24 @@ apiVersion: 1
 # qui bascule les rejets en 5.x. Le seuil est un choix d'exploitation, pas une
 # mesure.
 #
-# CE QUE CES RÈGLES NE PEUVENT PAS VOIR. Un message encore en file (status=
-# deferred) n'est pas un rebond : rien n'est perdu tant que Postfix réessaie, et
-# la règle ne le compte pas. La profondeur de file n'est pas journalisée par
-# Postfix : elle se lit par « docker compose exec postfix postqueue -p » sur le
-# serveur, pas ici.
+# CE QUE CES RÈGLES VOIENT. Les deux règles « email-defere-* » comptent ce que la
+# règle de rebond laisse passer : un message pas encore remis (status=deferred),
+# que Postfix réessaie. Chaque tentative laisse une ligne
+#   postfix/smtp[pid]: ID: to=<adresse>, relay=none, delay=114,
+#     delays=114/0.05/0/0, dsn=4.4.1, status=deferred (…)
+# et le champ « delay= » est l'ÂGE CUMULÉ du message depuis son arrivée, mesuré en
+# secondes (114 sur la deuxième tentative du test du 2026-11-17). C'est ce nombre,
+# pas le volume de lignes, qui répond à « est-ce que le courrier dort ».
+#
+# CE QUI LEUR ÉCHAPPE. La profondeur brute de file n'est pas journalisée : elle se
+# lit par « docker compose exec postfix postqueue -p » sur le serveur. Et une ligne
+# n'est pas un message — une tentative écrit une ligne par destinataire. Enfin, le
+# rythme des tentatives n'est pas régulier : il double à chaque échec
+# (minimal_backoff_time = 300 s, puis 600, 1200, …) jusqu'à maximal_backoff_time =
+# 4000 s, soit 66 min (valeurs rendues par « postconf -h » dans le conteneur). La
+# fenêtre de la règle d'âge est donc de 75 min : plus longue que le plus grand
+# écart possible entre deux lignes d'un même message bloqué, pour qu'une file
+# muette ne se déclare pas saine entre deux tentatives.
 #
 # LE DOSSIER. « Applications » est créé par le fournisseur de tableaux de bord
 # (docker/grafana/provisioning/dashboards/logging.yaml) ; c'est le nom qu'attend
@@ -95,14 +108,20 @@ groups:
             Le MX a répondu 5.7.x : IP non autorisée (SPF), DMARC en échec, ou
             message classé indésirable. Lire la ligne du rejet dans le dashboard
             « Emails sortants » (panneau « Rejets définitifs ») : le texte du
-            serveur dit lequel des trois. Vérifier ensuite, dans cet ordre :
-            docker compose exec postfix postconf -h myhostname (doit être
-            tarourt.yabiladi.com, nom dont le PTR est celui de l'IP) ;
-            docker compose logs php | grep DKIM (clé illisible = messages non
-            signés) ; puis les trois verdicts SPF/DKIM/DMARC d'un envoi de test
-            (docker compose exec -T php php bin/console mailer:test <adresse>
-            --from=webmaster@yabiladi.com). Un rejet en 5.7.1 accompagné de
-            « not authorized » vient de l'IP ou du SPF, pas du contenu.
+            serveur dit lequel des trois. Vérifier ensuite, dans cet ordre et
+            dans le dépôt Yabiladi-Infra (c'est là qu'est le relais depuis le
+            découpage modulaire) : docker compose exec postfix postconf -h
+            myhostname doit rendre imouzzer.yabiladi.com, nom dont le PTR est
+            l'IP 57.128.22.216 dont part le courrier ; docker compose exec
+            postfix cat /run/opendkim.state doit rendre « on » (« broken » = le
+            milter est mort, « unsigned » = aucune clé alors que le relais se
+            déclare seul expéditeur, « off » = poste de développement) ; docker
+            compose exec postfix postconf -h smtpd_milters doit nommer
+            inet:127.0.0.1:8891. Puis les trois verdicts SPF/DKIM/DMARC d'un
+            envoi de test (docker compose exec -T php php bin/console
+            mailer:test <adresse> --from=webmaster@yabiladi.com, dans le dépôt
+            du site). Un rejet en 5.7.1 accompagné de « not authorized » vient
+            de l'IP ou du SPF, pas du contenu.
       # ---------------------------------------------------------------------
       # Volume : tous les rejets définitifs, classe confondue.
       # ---------------------------------------------------------------------
@@ -215,3 +234,137 @@ groups:
             POSTMASTER du destinataire ou à l'hébergeur, pas dans ce dépôt ;
             entre-temps, un envoi de masse vers ce domaine est à suspendre
             plutôt qu'à répéter, chaque rejet aggravant la réputation.
+      # ---------------------------------------------------------------------
+      # L'âge du doyen de la file. C'est la règle qui répond à « est-ce que le
+      # courrier dort » : le champ delay= d'une ligne status=deferred est
+      # l'accumulé depuis l'arrivée du message, mesuré 114 à la deuxième
+      # tentative du test du 2026-11-17. Un message de service (réinitialisation
+      # de mot de passe, confirmation d'inscription) qui a une heure est un
+      # échec visible de l'utilisateur, quand bien même Postfix réessaiera
+      # jusqu'à cinq jours.
+      #
+      # La fenêtre de 75 min n'est pas un arrondi : maximal_backoff_time vaut
+      # 4000 s (66 min), donc un message bloqué peut espacer ses lignes de 66
+      # min. Une fenêtre plus courte laisserait la règle retomber à OK alors que
+      # la file est toujours pleine.
+      # ---------------------------------------------------------------------
+      - uid: email-defere-age
+        title: Emails — un message attend sa remise depuis plus d'une heure
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 4500, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'max(max_over_time({service="postfix"} |= "status=deferred" | regexp "delay=(?P<defer_delay>[0-9.]+)" | unwrap defer_delay [75m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 4500, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 4500, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [3600] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: email
+        annotations:
+          summary: Le plus ancien message en file a plus d'une heure
+          description: >-
+            Un message n'est toujours pas remis et Postfix le réessaie : ce n'est
+            pas un rebond, c'est une attente. Lire la file et l'âge réel sur le
+            serveur, dans le dépôt Yabiladi-Infra : docker compose exec postfix
+            postqueue -p (la ligne « (Reason: …) » donne le motif du dernier
+            échec) puis docker compose logs --since 75m postfix | grep
+            "status=deferred". Un seul destinataire concerné = adresse ou domaine
+            joignable mais refusant doucement (gris-listing, MX de secours) ; des
+            dizaines de « Requests » = plus général — résoudre le nom (docker
+            compose exec postfix postconf -h relayhost), joindre l'IP du MX, ou
+            vérifier que le 25 SORTANT n'est pas coupé chez l'hébergeur. Ne pas
+            vider la file pour faire taire l'alerte : postsuper -d efface le seul
+            endroit où le message existe encore.
+      # ---------------------------------------------------------------------
+      # Le volume des tentatives différées : la file qui grossit maintenant,
+      # avant que le premier de ces messages n'ait une heure. Séparée de la
+      # règle d'âge parce que les deux ne sonnent pas pour la même panne — un
+      # gris-listing de vingt minutes fait celle-ci sans jamais faire celle-là.
+      #
+      # SEUIL, ET CE QU'IL COMPTE VRAIMENT. Mesuré le 2026-11-17 avec trois
+      # messages volontairement bloqués : 6 lignes « status=deferred » en deux
+      # minutes (une par destinataire, une par tentative). Trente en quinze
+      # minutes = donc plusieurs messages à la fois, pas le hasard d'une
+      # boîte pleine. « for: 5m » filtre la pointe d'un lot de newsletter qui
+      # repart tout seul au réessai suivant.
+      # ---------------------------------------------------------------------
+      - uid: email-defere-volume
+        title: Emails — plus de trente remises différées en quinze minutes
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="postfix"} |= "status=deferred" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [30] }
+        noDataState: OK
+        execErrState: OK
+        for: 5m
+        labels:
+          severity: warning
+          team: email
+        annotations:
+          summary: "La file grossit : plus de trente tentatives différées en un quart d'heure"
+          description: >-
+            Ce compteur additionne les LIGNES de tentative, pas les messages :
+            une remise qui échoue écrit une ligne par destinataire. Un pic qui
+            retombe seul est un gris-listing ou un MX momentanément sourd ; un
+            pic qui dure se lit avec docker compose exec postfix postqueue -p,
+            où le nombre de « Requests » donne la taille réelle de la file. Si
+            l'attente se prolonge, la règle « un message attend depuis plus d'une
+            heure » prend le relais, en critique.
