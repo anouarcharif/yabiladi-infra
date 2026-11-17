@@ -851,7 +851,7 @@ checks_infra() {
     cid=$(docker compose ps -q postfix 2>/dev/null | head -1 || true)
     pub=''
     [ -n "$cid" ] && pub=$(docker inspect -f '{{with (index .NetworkSettings.Ports "25/tcp")}}{{range .}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' "$cid" 2>/dev/null || true)
-    log "  postfix        → port 25 publié sur « ${pub:-rien} » — sur la cible c'est l'IP de la machine, sinon tarourt n'a pas de relais"
+    log "  postfix        → port 25 publié sur « ${pub:-rien} » — sur la cible c'est l'IP de la machine. Ce que cette publication sert : la soumission depuis l'hôte d'imouzzer. Les conteneurs du réseau joignent « postfix:25 » en interne, et tarourt a son propre relais (« yabiladi-postfix-primary »)"
 
     res=$(docker compose exec -T postfix postqueue -p 2>/dev/null \
               | awk 'NR>1 && /^[0-9A-F][0-9A-F]*/ {n++} END {print n+0}' || true)
