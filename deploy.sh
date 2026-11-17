@@ -152,7 +152,7 @@ export_machine_env() {
 # Le conteneur qui déchiffre monte CE dépôt en /w : c'est là que vivent le
 # manifeste, les blocs chiffrés et deploy/secrets.sh. Le dépôt de l'application
 # concernée, quand ce n'est pas celui-ci, est monté en plus sous /app : la même
-# table du coffre sert aux quatre projets, chaque deploy.sh n'en déploie que les
+# table du coffre sert aux cinq projets, chaque deploy.sh n'en déploie que les
 # lignes qui sont les siennes. L'appelant désigne ce dépôt par TARGET_PROJECT_DIR,
 # en chemin d'hôte ; le conteneur ne le voit jamais que sous /app.
 run_secrets_tool() { # $@ = verbe du conteneur
@@ -265,7 +265,7 @@ ensure_volumes() {
                yabiladi_dbackup_data yabiladi_dbackup_tmp yabiladi_alloy_data \
                yabiladi_portainer_data; do
         docker volume inspect "$vol" >/dev/null 2>&1 && continue
-        log "     création du volume $vol (absent — les quatre projets le déclarent « external »)"
+        log "     création du volume $vol (absent — un projet voisin le déclare « external »)"
         docker volume create "$vol" >/dev/null \
             || die "impossible de créer $vol — un objet du même nom existe déjà dans un autre contexte (« docker volume ls »)"
     done
@@ -824,13 +824,41 @@ checks_infra() {
         log "  alloy          → sonde interne indisponible : voir « docker compose logs alloy » et l'absence d'erreurs d'envoi vers Loki"
     fi
 
-    # Postfix : l'état du démon, puis la longueur de la file. Un nombre qui ne
-    # descend pas entre deux déploiements veut dire que le relais upstream refuse
-    # (SPF, DMARC, quota) — ce n'est pas une panne de l'infrastructure, mais
-    # c'est ici que ça se lit, parce que c'est ici que la file vit.
+    # Postfix : la signature, l'adresse publiée et la longueur de la file. Ces
+    # trois lignes se lisent ensemble, parce que leurs pannes respectives se
+    # ressemblent vu de l'extérieur — un courrier qui ne part pas :
+    #   - « off » / « broken » = pas de signature, et le DMARC du domaine est en
+    #     « p=quarantine pct=100 » : le courrier part en spam sans que Postfix ne
+    #     le dise. « broken » veut de plus dire que le conteneur est unhealthy.
+    #   - le 25 publié en boucle locale sur la cible = rien d'extérieur
+    #     n'atteint le relais, et le V1 de l'autre machine na plus de sortie.
+    #   - un nombre qui ne descend pas entre deux déploiements veut dire que le
+    #     destinataire refuse (SPF, DMARC, quota, HELO ≠ PTR).
+    state=$(docker compose exec -T postfix cat /run/opendkim.state 2>/dev/null || echo 'illisible')
+    case "$state" in
+        on) sign='signature DKIM active' ;;
+        off) sign='AUCUNE CLÉ MONTÉE, courrier non signé (attendu sur un poste de développement)' ;;
+        broken) sign='OPENDKIM NE TOURNE PAS, courrier non signé — le conteneur est unhealthy' ;;
+        unsigned) sign='CLÉ ABSENTE ALORS QUE POSTFIX_DKIM_REQUIRED=1 — le conteneur est unhealthy et tout part non signé' ;;
+        *) sign='état de signature illisible (conteneur pas démarré ?)' ;;
+    esac
+    milters=$(docker compose exec -T postfix postconf -h smtpd_milters 2>/dev/null || echo '')
+    log "  postfix        → $sign (smtpd_milters : ${milters:-vide})"
+
+    # Ce que Docker a réellement pris en charge, lu dans l'inspection du
+    # conteneur et pas dans le .env : une interpolation ratée donne une écoute
+    # silencieuse en boucle locale, que seul le pair TCP démasque.
+    cid=$(docker compose ps -q postfix 2>/dev/null | head -1 || true)
+    pub=''
+    [ -n "$cid" ] && pub=$(docker inspect -f '{{with (index .NetworkSettings.Ports "25/tcp")}}{{range .}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' "$cid" 2>/dev/null || true)
+    log "  postfix        → port 25 publié sur « ${pub:-rien} » — sur la cible c'est l'IP de la machine, sinon tarourt n'a pas de relais"
+
     res=$(docker compose exec -T postfix postqueue -p 2>/dev/null \
               | awk 'NR>1 && /^[0-9A-F][0-9A-F]*/ {n++} END {print n+0}' || true)
     log "  postfix        → ${res:-illisible} message(s) en file d'attente"
+    deferred=$(docker compose exec -T postfix postqueue -p 2>/dev/null \
+                   | grep -c 'status=deferred' || true)
+    [ "${deferred:-0}" = "0" ] || log "  postfix        → attention : $deferred message(s) en status=deferred (destinataire injoignable ou refus ; voir « docker compose logs postfix »)"
 }
 
 # --- Points d'entrée ---------------------------------------------------------

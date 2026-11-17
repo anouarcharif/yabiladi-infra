@@ -104,6 +104,32 @@ check_path "$(env_val "$R_SITE" RADIO_CONTENT_HOST_PATH)" "" "ni l'un ni l'autre
 check_path "$(env_val "$R_SITE" SITE_MEDIA_HOST_PATH)" "33:33 755" "site (monte public/files)"
 check_path "$(env_val "$R_SITE" SITE_EDITOR_IMAGES_HOST_PATH)" "33:33 755" "site (monte public/img)"
 check_path "$(env_val "$R_SITE" OPENDKIM_KEYS_DIR)" "" "site : l'entrypoint php copie les clés"
+# Le relais de l'infrastructure lit le même dossier hôte. Contrairement au
+# conteneur php, lui ne peut pas s'en passer en silence : sans clé montée,
+# « entrypoint.sh » démarre le relais non signé, et le DMARC de yabiladi.com est
+# en « p=quarantine pct=100 » — un courrier non signé part donc en spam, et le
+# seul indice en est le conteneur qui reste healthy avec état « off ».
+keyfile="$(env_val "$R_INFRA" OPENDKIM_KEYS_DIR)"
+# Domaine et sélecteur : absents du .env versionné quand la machine se contente
+# du défaut écrit dans compose.yaml et l'image.
+dkim_domain="$(env_val "$R_INFRA" OPENDKIM_DOMAIN)"; dkim_domain="${dkim_domain:-yabiladi.com}"
+dkim_selector="$(env_val "$R_INFRA" OPENDKIM_SELECTOR)"; dkim_selector="${dkim_selector:-mail}"
+keyfile="$keyfile/$dkim_domain/$dkim_selector.private"
+if [ -f "$keyfile" ]; then
+    ok "$keyfile" "clé DKIM du relais présente ($(stat -c '%u:%g %a' "$keyfile" 2>/dev/null || echo 'non lisible'))"
+else
+    note "$keyfile" "ABSENT — le relais partira non signé, et le DMARC « p=quarantine » met ce courrier en spam"
+fi
+# L'adresse sur laquelle le relais publie son 25. Le défaut de compose.yaml est
+# la boucle locale — voulu, pour qu'une machine mal remplie n'expose pas un
+# port 25 ouvert — mais sur la cible c'est aussi ce qui rend le relais
+# injoignable depuis tarourt, dont le Postfix Debian est retiré.
+pub="$(env_val "$R_INFRA" POSTFIX_PUBLISH_ADDRESS)"
+case "$pub" in
+    ""|127.0.0.1|localhost) note "POSTFIX_PUBLISH_ADDRESS" "« ${pub:-non déclaré} » : le 25 ne s'entend que sur cette machine, le V1 de tarourt n'aura aucun relais où soumettre" ;;
+    *) ok "POSTFIX_PUBLISH_ADDRESS" "$pub" ;;
+esac
+note "POSTFIX_RELAY_NETWORKS" "$(env_val "$R_INFRA" POSTFIX_RELAY_NETWORKS | sed 's/^$/non déclaré — seuls les réseaux des interfaces du conteneur soumettent/')"
 check_path "$(env_val "$R_SITE" PRAYER_PDF_HOST_DIR)" "" "site : sous son propre clone par défaut"
 # L'index du moteur de recherche du forum : valeur par défaut relative au clone
 # du site, donc le « ./ » se résout ici — statuer sur le chemin tel quel
@@ -112,10 +138,11 @@ check_path "$(env_val "$R_SITE" PRAYER_PDF_HOST_DIR)" "" "site : sous son propre
 # conteneur du moteur, que compose.yaml démarre en 999:999.
 check_path "$(env_val "$R_SITE" MANTICORE_DATA_HOST_PATH | sed "s|^\./|$R_SITE/|")" "999:999 750" "site prepare_manticore_data"
 
-# Les trois clés lues par deux projets : « le même » veut dire la même valeur
-# absolue, sinon un projet écrit dans un arbre et l'autre archive le voisin vide.
+# Les quatre clés lues par deux projets : « le même » veut dire la même valeur
+# absolue, sinon un projet écrit dans un arbre et l'autre archive le voisin vide,
+# ou l'un signe avec une clé que le DNS ne publie pas.
 hdr "3. Les valeurs partagées entre deux projets (divergence = archive vide annoncée « réussi »)"
-for cle in SITE_MEDIA_HOST_PATH SITE_EDITOR_IMAGES_HOST_PATH RADIO_CONTENT_HOST_PATH; do
+for cle in SITE_MEDIA_HOST_PATH SITE_EDITOR_IMAGES_HOST_PATH RADIO_CONTENT_HOST_PATH OPENDKIM_KEYS_DIR; do
     a="$(env_val "$R_INFRA" "$cle")"; b="$(env_val "$R_SITE" "$cle")"
     [ -z "$a" ] && [ -z "$b" ] && continue
     if [ "$a" = "$b" ]; then ok "$cle" "$a"; else bad "$cle" "infra=« $a » site=« $b » — deux arbres différents, l'un sera archivé vide"; fi
@@ -194,14 +221,14 @@ cat <<'ARITH'
 ARITH
 
 # ------------------------------------------------------------------ 5. Docker
-hdr "5. Réseaux et volumes externes déclarés par les quatre projets"
+hdr "5. Réseaux et volumes externes déclarés par les cinq projets"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     for net in yabiladi_app yabiladi_logging; do
         docker network inspect "$net" >/dev/null 2>&1 && ok "$net" "réseau présent" \
             || note "$net" "absent — infra/deploy.sh le crée (ensure_networks)"
     done
     have=$(docker volume ls --format '{{.Name}}' | grep -c '^yabiladi_')
-    note "volumes yabiladi_*" "$have trouvés — 16 déclarés « external » par les quatre projets, les deploy.sh créent les manquants"
+    note "volumes yabiladi_*" "$have trouvés — 18 objets distincts déclarés « external » dans les cinq compose.yaml (comptés le 2026-11-17 ; les quatre radio_*_state sont déclarés à la fois par le site, qui les lit pour ses statistiques, et par le projet des antennes, qui les écrit), les deploy.sh créent les manquants"
     orphelins=$(docker volume ls --format '{{.Name}}' | grep -E '^yabiladi_(backrest|db_data|grafana_data|loki_data|prometheus_data|php_(vendor|var_cache|var_share))' | tr '\n' ' ')
     [ -n "$orphelins" ] && note "orphelins du dépôt unique" "$orphelins— aucun projet ne les déclare, ne pas les recréer"
     docker info --format '           stockage : {{.Driver}}  {{.OperatingSystem}}'
@@ -212,8 +239,8 @@ fi
 # ------------------------------------------------------------------- 6. Ports
 # Un port déjà publié fait échouer le « up -d » sur une machine qui tourne encore
 # en V1 : c'est le seul point de cette liste que le déploiement ne répare pas.
-hdr "6. Les ports que les quatre projets publient"
-ports="80 443 $(env_val "$R_SITE" APP_PORT 2>/dev/null || echo 8080) \
+hdr "6. Les ports que les cinq projets publient"
+ports="80 443 25 $(env_val "$R_SITE" APP_PORT 2>/dev/null || echo 8080) \
 $(env_val "$R_SITE" DAGU_HTTP_PORT 2>/dev/null || echo 8086) \
 $(env_val "$R_INFRA" DBACKUP_HTTP_PORT 2>/dev/null || echo 8087) \
 $(env_val "$R_INFRA" GRAFANA_HTTP_PORT 2>/dev/null || echo 8088) \
@@ -229,6 +256,14 @@ if command -v ss >/dev/null 2>&1; then
 else
     note "ss" "outil absent — contrôler « sudo lsof -iTCP -sTCP:LISTEN -P » sur la liste : $(echo $ports | tr '\n' ' ')"
 fi
+cat <<'PORT25'
+  Le 25 mérite son attention : une distribution installe son Postfix dessus sans
+  qu'on le lui demande, et le « up -d » de l'infrastructure meurt alors sur
+  « port is already allocated ». Sur la machine du conteneur, le démon local ne
+  doit donc pas écouter (voir RUNBOOK de la bascule mail) : un courrier qui
+  partirait par lui sortirait sans la clé montée dans le conteneur, donc non
+  signé, donc en spam sous le « p=quarantine » du domaine.
+PORT25
 
 # ------------------------------------------------------------------ 7. bilan
 hdr "Bilan"
@@ -241,4 +276,8 @@ if [ "$blocking" -gt 0 ]; then
 FIN
     exit 1
 fi
-echo "  Rien qui doive être réglé avant de jouer les quatre « ./deploy.sh », dans l'ordre : pile, puis les trois applications (la pile crée les réseaux et volumes « external » que les applications déclarent, dont geoip_data)."
+echo "  Rien qui doive être réglé avant de jouer les cinq « ./deploy.sh », dans l'ordre : pile,
+  puis le site, puis les trois autres (la pile crée les réseaux et volumes « external » que les
+  applications déclarent, dont geoip_data ; le site crée le réseau « yabiladi_app » et pose les
+  clés « LEGACY_SITE_DB_* » que le « stream.py » des antennes lit sur place — médiakit et
+  intranet restent libres de leur rang, les antennes non)."

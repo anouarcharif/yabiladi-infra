@@ -104,8 +104,15 @@ scrape_configs:
   # Le projet est donc coupé avec son nom complet (« yabiladi-infra-loki-1 » →
   # « loki »), et le préfixe reste OPTIONNEL, pour qu'un conteneur lancé hors
   # de ces projets (« factudb-1 », une sonde ponctuelle) reçoive tout de même
-  # une étiquette plutôt qu'aucune. Un cinquième projet Compose devra être
-  # ajouté ici, sinon ses services porteront « nom-du-projet-nom-du-service ».
+  # une étiquette plutôt qu'aucune. Un projet Compose de plus doit être ajouté
+  # ici, sinon ses services portent « nom-du-projet-nom-du-service » : mesuré le
+  # 2026-11-17 avec le cinquième (« yabiladi-radio-radio-yabiladi-1 » →
+  # « radio-radio-yabiladi »), les quatre règles d'alerte qui écrivent
+  # service="radio-yabiladi" ne matchaient plus rien, tandis que les panneaux
+  # en « service=~"radio-.+" » continuaient à afficher une courbe — le trou ne
+  # se voyait que du côté des alertes. Le nom court des antennes ne change pas,
+  # lui, parce que Loki lit l'étiquette Compose « com.docker.compose.service »
+  # et non le nom du conteneur (docker/alloy/config.alloy).
   - job_name: docker
     static_configs:
       - targets: ["cadvisor:8080"]
@@ -118,6 +125,6 @@ scrape_configs:
       # et reste sans étiquette « service » : les panneaux groupés par service
       # ignorent ce que la stack ne déclare pas, au lieu d'inventer un groupe.
       - source_labels: [name]
-        regex: "^(?:yabiladi-(?:infra|symfony|facturation|mediakit)-|yabiladi-)?(.+)-[0-9]+$"
+        regex: "^(?:yabiladi-(?:infra|symfony|facturation|mediakit|radio)-|yabiladi-)?(.+)-[0-9]+$"
         target_label: service
         replacement: "$1"

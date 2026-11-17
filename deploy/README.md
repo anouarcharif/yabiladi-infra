@@ -60,25 +60,42 @@ conteneurs — chaque projet a son propre fichier Compose et son nom de projet.
 | Depuis | Ce qui est déployé | Emplacement sur la cible |
 |---|---|---|
 | `Yabiladi-Infra/` (ce dépôt) | Traefik, DBackup, Loki/Alloy/Grafana, Prometheus/cAdvisor/node-exporter, Postfix, geoipupdate | `/opt/yabiladi-infra` |
-| `Yabiladi-V2-Symfony/` | site, forum, Dagu, les quatre antennes, Navidrome, nginx | `/opt/yabiladi-symfony` |
+| `Yabiladi-V2-Symfony/` | site, forum, Dagu (horloge de toute la pile), Navidrome, nginx | `/opt/yabiladi-symfony` |
 | `Yabiladi-Mediakit-V2/` | `pub.yabiladi.com` : `mediakit-php`/`-nginx`, cache, PDF, contrôles | `/opt/yabiladi-mediakit` |
 | `Yabiladi-Facturation-V2/` | `ws.yabiladi.com` : `facturation-php`/`-nginx`, cache, contrôles | `/opt/yabiladi-facturation` |
+| `Yabiladi-Radio-V2/` | les quatre antennes SHOUTcast : `radio-{yabiladi,chaabi,azawan,nayda}`, ports 8000/8100/9000/9100, point de contrôle 9600 interne | `/opt/yabiladi-radio` |
 
 ```bash
 bash deploy.sh                                   # la pile, et elle seule
-cd ../Yabiladi-V2-Symfony    && bash deploy.sh   # site + Dagu + radio
+cd ../Yabiladi-V2-Symfony    && bash deploy.sh   # site + Dagu + Navidrome
 cd ../Yabiladi-Mediakit-V2   && bash deploy.sh   # médiakit seulement
 cd ../Yabiladi-Facturation-V2 && bash deploy.sh  # intranet seulement
+cd ../Yabiladi-Radio-V2      && bash deploy.sh   # les quatre antennes
 ```
 
-La pile se déploie en premier : les trois autres déclarent ses réseaux (`app`, `logging`)
-et son volume `geoip_data` en `external: true`, et s'arrêtent si l'objet manque.
+La pile se déploie en premier : les quatre autres déclarent ses réseaux (`app`, `logging`)
+et son volume `geoip_data` en `external: true`, et s'arrêtent si l'objet manque. Le site passe
+ensuite, avant les antennes : c'est lui qui crée le réseau `yabiladi_app` qu'elles rejoignent
+et qui pose les quatre clés `LEGACY_SITE_DB_*` que leur `stream.py` lit sur place — leur
+`deploy.sh` nomme le dépôt à déployer d'abord s'il manque l'un des deux.
 
-Les quatre acceptent `--build`, `--secrets`, `--encrypt` et `--verify`. Chacun ne matérialise
+Un cinquième projet Compose a une conséquence ici même : `docker/prometheus/prometheus.yml`
+coupait le nom de projet avec une énumération (`infra|symfony|facturation|mediakit`), et un
+projet oublié dans cette liste reçoit `« nom-du-projet-nom-du-service »` comme étiquette
+`service`. Mesuré le 2026-11-17 : les antennes sont devenues `radio-radio-yabiladi`, et les
+règles qui écrivent `service="radio-yabiladi"` ne matchaient plus rien — silencieusement,
+puisque les panneaux en `service=~"radio-.+"` continuaient d'afficher une courbe. La liste
+porte désormais les cinq. L'étiquette `service` de Loki, elle, vient de l'étiquette Compose
+`com.docker.compose.service` (`docker/alloy/config.alloy`) et ne bouge pas au changement de
+projet : c'est pour cela que seules les règles Prometheus sont concernées.
+
+Les cinq acceptent `--build`, `--secrets`, `--encrypt` et `--verify`. Chacun ne matérialise
 que ses propres blocs du coffre, par la colonne `project` du manifeste puis, sauf pose
 explicite de `SECRETS_ONLY`, par la liste par défaut de son script : `env.local,dbackup,geoip,htpasswd,grafana-admin`
 ici, `env.local.site,credentials,ui-sync` côté site, `facturation.env` et `mediakit.env` de
-leur côté. L'emplacement de la pile se redéclare par `YABILADI_INFRA_DIR` (défaut versionné :
+leur côté, `radio.env` pour les antennes (les sept clés d'antenne y sont entrées le 2026-11-17,
+rescellées depuis `credentials.sops.bin` et retirées de lui : 33 lignes → 26 + 7, recouvrement
+nominal 0). L'emplacement de la pile se redéclare par `YABILADI_INFRA_DIR` (défaut versionné :
 `/opt/yabiladi-infra`) dans le `.env` du dépôt appelant.
 
 ## Faire tourner un secret
