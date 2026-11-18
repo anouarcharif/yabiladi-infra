@@ -5,7 +5,7 @@
 #   - « apt-get download postfix » sur debian:trixie-slim rend 3.10.13-0+deb13u1.
 #     bookworm-backports plafonne à 3.10.3-2~bpo12+1 et seul le dépôt instable
 #     porte 3.11.7 : la dernière version STABLE Debian est 3.10.13.
-#   - opendkim reste packagé en trixie (2.11.0~beta2-9.1) : la liste
+#   - opendkim reste packagé en trixie (2.11.0~beta2-9.1+b1) : la liste
 #     « apt-get install » ci-dessous ne change pas d'un paquet, et la contrainte
 #     mesurée sur ce 2.11.0 (« InternalHosts » en FICHIER, la forme en ligne
 #     étant refusée à l'analyse) tient toujours — voir opendkim.conf.

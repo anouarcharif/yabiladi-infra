@@ -55,8 +55,11 @@ DBackup, Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor.
                                Portainer, Dozzle, mandataire de socket) suit dans
                                le même geste ; ses conteneurs restent pilotés par
                                docker-admin/scripts/deploy.sh
-  ./deploy.sh --build          idem, en rebuildant les images (docker/postfix,
-                               docker/secrets modifiés)
+  ./deploy.sh --build          idem, en rebuildant TOUTES les images
+                               (docker/secrets, php local) — l'image du relais,
+                               elle, se construit dans le geste courant depuis
+                               le 2026-11-18 : « up -d » ne reconstruit rien
+                               quand seul le contexte a changé
   ./deploy.sh --secrets        re-matérialise seul les entrées du coffre dont la
                                colonne « project » vaut « infra »
   ./deploy.sh --encrypt        poste de dev : chiffre les clairs vers deploy/secrets/
@@ -965,6 +968,19 @@ case "$verbe" in
         prepare_backups
 
         log "4/5 Services…"
+        # L'image du relais se construit ici, tout le temps, et le drapeau
+        # « --build » ne lui suffit plus : mesuré le 2026-11-18, « docker
+        # compose up -d » ne reconstruit AUCUNE image quand seul le contexte a
+        # changé (Dockerfile, main.cf). Un « git pull + ./deploy.sh » portant la
+        # base trixie laissait donc tourner « mail_version = 3.7.11 » derrière
+        # un conteneur déclaré « healthy » — la montée de version ne doit pas
+        # dépendre d'un drapeau que le geste du jour J n'impose pas.
+        # Cible explicite « postfix » : reconstruire toutes les images à chaque
+        # déploiement recréerait php, le coffre et les voisins, alors qu'avec le
+        # cache un postfix déjà à jour ne coûte que quelques secondes et ne
+        # déclenche aucune recréation.
+        docker compose build postfix >/dev/null || \
+            die "construction de l'image postfix impossible : RIEN n'a été démarré ni recréé"
         docker compose up -d
         # Après « up -d », pas avant : si Traefik devait être recréé, le redémarrage
         # de trop serait fait deux fois ; si il ne l'est pas, c'est ce restart qui
