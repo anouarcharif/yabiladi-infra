@@ -547,6 +547,17 @@ groups:
             plus toute seule). Le second est une panne durable ; le premier,
             répété, annonce le second. Remplace chk_radio.py du serveur
             physique, dont ce conteneur a repris le rôle.
+            Une case de grille ne monte plus ici : depuis Yabiladi-Radio-V2
+            « bc668bd » (2026-11-18), le changement de genre passe par
+            « supervisorctl stop » puis « start » et écrit « stopped: sc_trans
+            (exit status 1) », que cette expression ne compte pas. Avant ce
+            jour-là, le « killall -9 sc_trans » de stream.py tuait le processus
+            derrière le dos de supervisord, qui rendait « exited: … (terminated
+            by SIGKILL; not expected) » — l'alerte criait donc à chaque case
+            (7 fois entre 13 h et 21 h sur la station principale). « not
+            expected » est revenu aux seuls accidents : SIGKILL d'un tueur OOM,
+            SIGSEGV (un sur radio-azawan le 2026-11-18, reprise en 5 s par
+            autorestart).
       - uid: radio-auditeurs-refuses
         title: Une antenne est pleine et refuse des auditeurs
         condition: C

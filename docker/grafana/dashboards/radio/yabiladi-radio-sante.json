@@ -905,7 +905,7 @@
     {
       "type": "timeseries",
       "title": "supervisord : sorties et renoncements",
-      "description": "« exited: … (not expected) » : le programme est mort et repart, la coupure dure quelques secondes. « gave up: … entered FATAL state » : supervisord renonce, l'antenne ne repartira plus toute seule. C'est ce que faisait chk_radio.py sur le serveur physique.",
+      "description": "« exited: … (not expected) » : le programme est mort et repart, la coupure dure quelques secondes. « gave up: … entered FATAL state » : supervisord renonce, l'antenne ne repartira plus toute seule. « stopped: … » : case de grille voulue — depuis Yabiladi-Radio-V2 « bc668bd » (2026-11-18), le changement de genre s'arrête par « supervisorctl » au lieu d'un « kill -9 », et seule la ligne « stopped » apparaît. C'est ce que faisait chk_radio.py sur le serveur physique.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
