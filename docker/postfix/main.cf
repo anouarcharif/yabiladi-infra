@@ -60,6 +60,31 @@ notify_classes =
 # smtpd_milters et non_smtpd_milters ne sont posés par entrypoint.sh que quand
 # la clé DKIM est présente (voir opendkim.conf) : sans eux, le courrier soumis
 # par un tiers (le V1, les shells de l'hôte) partirait non signé.
+#
+# « milter_default_action » : sa valeur par défaut passe de « tempfail » à
+# « shutdown » entre Postfix 3.7 (base bookworm) et 3.10 (base trixie), et
+# « compatibility_level = 3.6 » ne la garde pas — les deux valeurs ont été lues
+# au « postconf » de chaque image, ce gabarit rendu dessus. Épinglée ici, la
+# règle reste celle subie depuis le premier jour : un milter qui meurt en pleine
+# session produit un échec temporaire (le message reste en file et repartira),
+# et non une coupure de connexion. Ce n'est pas une préférence de style : la mort
+# d'OpenDKIM est un état prévu par l'entrypoint (« broken ») et par
+# healthcheck.sh, et le relais continue alors de remettre — avec cette ligne, il
+# continue de remettre en attendant l'alerte ; sans elle, il fermerait les
+# sessions SMTP de php, dagu et des shells au moment même où quelque chose tombe.
+milter_default_action = tempfail
+#
+# Deux autres défauts bougent entre 3.7 et 3.10 et ne sont volontairement PAS
+# épinglés, parce que la répétition a rendu exactement le même transcript des
+# deux côtés :
+#   - « smtpd_forbid_unauth_pipelining » (no → yes) ne regarde que les clients
+#     qui n'ont pas le droit de relayer, et ceux-là reçoivent déjà un 554 après
+#     RCPT (mesuré, image par image). La rafale « MAIL FROM + RCPT TO + DATA
+#     d'une seule écriture », elle, rend « 250 250 354 » sur les deux versions :
+#     nos clients sont tous dans mynetworks.
+#   - « smtpd_forbid_bare_newline » (no → normalize) : un corps en LF seuls — ce
+#     que produit un heredoc de shell — est accepté, remis et sa signature DKIM
+#     vérifiée valide sur les deux versions.
 maillog_file = /dev/stdout
 message_size_limit = 26214400
 biff = no
