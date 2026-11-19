@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Déploiement de l'infrastructure commune : proxy (Traefik), relais SMTP
-# (Postfix), géolocalisation (geoipupdate), console de sauvegarde (DBackup) et
-# les deux piles de mesure (Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor).
+# Déploiement de l'infrastructure commune : proxy (Traefik), géolocalisation
+# (geoipupdate), console de sauvegarde (DBackup) et les deux piles de mesure
+# (Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor).
 #
 # Ce script ne pilote AUCUN autre projet. Il ne fait le « git pull » de personne
 # d'autre, ne démarre pas le site, la facturation, le médiakit, la radio ou Dagu,
@@ -47,7 +47,7 @@ die() { printf 'ERREUR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-Déploiement de l'infrastructure commune : Traefik, Postfix, geoipupdate,
+Déploiement de l'infrastructure commune : Traefik, geoipupdate,
 DBackup, Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor.
 
   ./deploy.sh                  pull + secrets + dossiers + up -d + contrôles infra
@@ -55,11 +55,11 @@ DBackup, Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor.
                                Portainer, Dozzle, mandataire de socket) suit dans
                                le même geste ; ses conteneurs restent pilotés par
                                docker-admin/scripts/deploy.sh
-  ./deploy.sh --build          idem, en rebuildant TOUTES les images
-                               (docker/secrets, php local) — l'image du relais,
-                               elle, se construit dans le geste courant depuis
-                               le 2026-11-18 : « up -d » ne reconstruit rien
-                               quand seul le contexte a changé
+  ./deploy.sh --build          idem — ce dépôt ne construit plus aucune image de
+                               service : la seule qui s'y fabriquait (le relais
+                               SMTP) est partie le 2026-11-19 dans le projet
+                               « yabiladi-mailer ». Le drapeau reste accepté pour
+                               ne pas casser le runbook de bascule
   ./deploy.sh --secrets        re-matérialise seul les entrées du coffre dont la
                                colonne « project » vaut « infra »
   ./deploy.sh --encrypt        poste de dev : chiffre les clairs vers deploy/secrets/
@@ -264,7 +264,7 @@ ensure_volumes() {
     # absent, « docker compose up -d » échouerait sur le montage de dbackup, pas
     # sur le projet voisin. Le créer ici ne touche aucune donnée — la commande
     # ne fait rien quand le volume existe déjà.
-    for vol in yabiladi_postfix_spool yabiladi_traefik_acme yabiladi_geoip_data \
+    for vol in yabiladi_traefik_acme yabiladi_geoip_data \
                yabiladi_dbackup_data yabiladi_dbackup_tmp yabiladi_alloy_data \
                yabiladi_portainer_data; do
         docker volume inspect "$vol" >/dev/null 2>&1 && continue
@@ -827,46 +827,9 @@ checks_infra() {
         log "  alloy          → sonde interne indisponible : voir « docker compose logs alloy » et l'absence d'erreurs d'envoi vers Loki"
     fi
 
-    # Postfix : la signature, l'adresse publiée et la longueur de la file. Ces
-    # trois lignes se lisent ensemble, parce que leurs pannes respectives se
-    # ressemblent vu de l'extérieur — un courrier qui ne part pas :
-    #   - « off » / « broken » = pas de signature, et le DMARC du domaine est en
-    #     « p=quarantine pct=100 » : le courrier part en spam sans que Postfix ne
-    #     le dise. « broken » veut de plus dire que le conteneur est unhealthy.
-    #   - le 25 publié en boucle locale sur la cible = rien d'extérieur
-    #     n'atteint le relais, et le V1 de l'autre machine n'a plus de sortie.
-    #   - un nombre qui ne descend pas entre deux déploiements veut dire que le
-    #     destinataire refuse (SPF, DMARC, quota, HELO ≠ PTR).
-    state=$(docker compose exec -T postfix cat /run/opendkim.state 2>/dev/null || echo 'illisible')
-    case "$state" in
-        on) sign='signature DKIM active' ;;
-        off) sign='AUCUNE CLÉ MONTÉE, courrier non signé (attendu sur un poste de développement)' ;;
-        broken) sign='OPENDKIM NE TOURNE PAS, courrier non signé — le conteneur est unhealthy' ;;
-        unsigned) sign='CLÉ ABSENTE ALORS QUE POSTFIX_DKIM_REQUIRED=1 — le conteneur est unhealthy et tout part non signé' ;;
-        *) sign='état de signature illisible (conteneur pas démarré ?)' ;;
-    esac
-    milters=$(docker compose exec -T postfix postconf -h smtpd_milters 2>/dev/null || echo '')
-    log "  postfix        → $sign (smtpd_milters : ${milters:-vide})"
-
-    # Ce que Docker a réellement pris en charge, lu dans l'inspection du
-    # conteneur et pas dans le .env : une interpolation ratée donne une écoute
-    # silencieuse en boucle locale, que seul le pair TCP démasque.
-    cid=$(docker compose ps -q postfix 2>/dev/null | head -1 || true)
-    pub=''
-    [ -n "$cid" ] && pub=$(docker inspect -f '{{with (index .NetworkSettings.Ports "25/tcp")}}{{range .}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' "$cid" 2>/dev/null || true)
-    log "  postfix        → port 25 publié sur « ${pub:-rien} » — sur la cible c'est l'IP de la machine. Ce que cette publication sert : la soumission depuis l'hôte d'imouzzer. Les conteneurs du réseau joignent « postfix:25 » en interne, et tarourt a son propre relais (« yabiladi-postfix-primary »)"
-
-    res=$(docker compose exec -T postfix postqueue -p 2>/dev/null \
-              | awk 'NR>1 && /^[0-9A-F][0-9A-F]*/ {n++} END {print n+0}' || true)
-    log "  postfix        → ${res:-illisible} message(s) en file d'attente"
-    # Le motif « status=deferred » est celui des JOURNAUX, pas de « postqueue -p » :
-    # mesuré le 2026-11-17 avec 33 messages volontairement bloqués, ce grep rendait
-    # 0 et la ligne se disait verte. Une remise en attente se reconnaît ici à la
-    # ligne de motif qui précède le destinataire — 33 messages, 33 lignes de motif,
-    # comptées par le même « grep -c "^ *(" ».
-    deferred=$(docker compose exec -T postfix postqueue -p 2>/dev/null \
-                   | grep -c '^ *(' || true)
-    [ "${deferred:-0}" = "0" ] || log "  postfix        → attention : $deferred remise(s) en attente (la ligne « (…raison…) » du nom de file dit pourquoi ; les tentatives différées sont dans « docker compose logs postfix »)"
+    # Le relai SMTP n'est plus un service de ce dépôt (départ du 2026-11-19 vers
+    # « yabiladi-mailer ») : signature DKIM et longueur de la file se lisent dans
+    # le rapport de « Yabiladi-Mailer/deploy.sh --verify ».
 }
 
 # --- Points d'entrée ---------------------------------------------------------
@@ -958,29 +921,11 @@ case "$verbe" in
         hta_before="$(hta_fingerprint)"
         run_secrets_tool materialize
 
-        if [ "$verbe" = build ]; then
-            log "     (rebuild des images demandé : docker/postfix et docker/secrets)"
-            docker compose build
-        fi
-
         log "3/5 Dossiers de la pile de journaux et coffre de sauvegarde…"
         prepare_logging
         prepare_backups
 
         log "4/5 Services…"
-        # L'image du relais se construit ici, tout le temps, et le drapeau
-        # « --build » ne lui suffit plus : mesuré le 2026-11-18, « docker
-        # compose up -d » ne reconstruit AUCUNE image quand seul le contexte a
-        # changé (Dockerfile, main.cf). Un « git pull + ./deploy.sh » portant la
-        # base trixie laissait donc tourner « mail_version = 3.7.11 » derrière
-        # un conteneur déclaré « healthy » — la montée de version ne doit pas
-        # dépendre d'un drapeau que le geste du jour J n'impose pas.
-        # Cible explicite « postfix » : reconstruire toutes les images à chaque
-        # déploiement recréerait php, le coffre et les voisins, alors qu'avec le
-        # cache un postfix déjà à jour ne coûte que quelques secondes et ne
-        # déclenche aucune recréation.
-        docker compose build postfix >/dev/null || \
-            die "construction de l'image postfix impossible : RIEN n'a été démarré ni recréé"
         docker compose up -d
         # Après « up -d », pas avant : si Traefik devait être recréé, le redémarrage
         # de trop serait fait deux fois ; si il ne l'est pas, c'est ce restart qui

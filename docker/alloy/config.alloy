@@ -20,8 +20,9 @@
 // ---------------------------------------------------------------------------
 // Un seul point d'entrée : l'API Docker lue sur le socket monté en lecture
 // seule. Toute la pile applicative tourne sur le réseau `app`, donc cette
-// découverte unique couvre php, nginx, traefik, dagu, dbackup et postfix :
-// il n'existe aucun second collecteur, d'où l'absence de doublons.
+// découverte unique couvre php, nginx, traefik, dagu, dbackup et stalwart (le
+// relai SMTP, conteneur d'un autre dépôt mais de ce socket : il n'existe aucun
+// second collecteur, d'où l'absence de doublons).
 // match_first_network (défaut true) évite une cible par réseau quand un
 // conteneur en occupe plusieurs.
 discovery.docker "containers" {
@@ -66,7 +67,7 @@ discovery.relabel "labels" {
   // app <- l'application servie, une valeur par famille de conteneurs :
   //   facturation : ws.yabiladi.com (facturation-php, facturation-nginx) ;
   //   site        : le site public (php, nginx) ;
-  //   infra       : tout le reste (traefik, dagu, dbackup, postfix, radios…).
+  //   infra       : tout le reste (traefik, dagu, dbackup, stalwart, radios…).
   // C'est le sélecteur court demandé pour l'exploitation : {app="facturation"}
   // isole l'intranet d'un coup, sans énumérer ses deux services. Les regex de
   // relabel sont ancrées : « (php|nginx) » ne mord pas sur « facturation-php ».

@@ -770,8 +770,8 @@
     },
     {
       "type": "stat",
-      "title": "Postfix",
-      "description": "Relais SMTP sortant.",
+      "title": "Stalwart",
+      "description": "Relai SMTP sortant — conteneur du dépôt Yabiladi-Mailer, sur cette machine.",
       "datasource": {
         "type": "prometheus",
         "uid": "yabiladi-prometheus"
@@ -782,7 +782,7 @@
             "type": "prometheus",
             "uid": "yabiladi-prometheus"
           },
-          "expr": "count(container_last_seen{name=~\".+\", instance=\"$serveur\", service=\"postfix\"} > (time() - 60)) OR vector(0)",
+          "expr": "count(container_last_seen{name=~\".+\", instance=\"$serveur\", service=\"stalwart\"} > (time() - 60)) OR vector(0)",
           "instant": true,
           "refId": "A"
         }

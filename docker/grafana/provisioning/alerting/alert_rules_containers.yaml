@@ -3,7 +3,7 @@ apiVersion: 1
 # Alertes sur l'arrêt de conteneurs.
 #
 # UNE RÈGLE PAR CONTENEUR CRITIQUE (php, nginx, traefik, dagu, loki,
-# postfix, facturation, mediakit, manticore) : l'alerte nomme explicitement le
+# stalwart, facturation, mediakit, manticore) : l'alerte nomme explicitement le
 # conteneur down, pas besoin d'ouvrir le dashboard pour savoir lequel. Le
 # détecteur global « baisse anormale » a été retiré : une alerte agrégée ne nomme
 # pas le conteneur et se déclenchait sur la moindre instabilité de cAdvisor. Ses deux
@@ -45,6 +45,12 @@ deleteRules:
     uid: container-down
   - orgId: 1
     uid: container-mass-down
+  # Le relais a quitté ce dépôt le 2026-11-19 (projet « yabiladi-mailer ») : la
+  # règle est réécrite sous l'UID « container-stalwart-down », et l'ancienne
+  # continuerait d'annoncer l'arrêt d'un conteneur qui n'existe plus — avec
+  # « noDataState: Alerting », elle sonnerait deux minutes après la bascule.
+  - orgId: 1
+    uid: container-postfix-down
 
 groups:
   - orgId: 1
@@ -306,8 +312,8 @@ groups:
             indexés. Vérifier : docker compose ps loki ; docker compose logs --since 10m loki.
             Redémarrage : docker compose up -d loki.
 
-      - uid: container-postfix-down
-        title: Postfix arrêté
+      - uid: container-stalwart-down
+        title: Stalwart arrêté
         condition: C
         data:
           - refId: A
@@ -315,7 +321,7 @@ groups:
             datasourceUid: yabiladi-prometheus
             model:
               datasource: { type: prometheus, uid: yabiladi-prometheus }
-              expr: 'count(container_last_seen{name=~".+", job="docker", service="postfix"} > (time() - 60)) OR vector(0)'
+              expr: 'count(container_last_seen{name=~".+", job="docker", service="stalwart"} > (time() - 60)) OR vector(0)'
               queryType: instant
               refId: A
           - refId: B
@@ -347,14 +353,22 @@ groups:
         labels:
           severity: critical
           team: infrastructure
-          container: postfix
+          container: stalwart
         annotations:
-          summary: 'Conteneur Postfix arrêté'
+          summary: 'Conteneur Stalwart arrêté'
           description: >-
-            Le conteneur postfix (relais SMTP) n'est plus vu par cAdvisor.
-            Les emails sortants sont en file d'attente (newsletter, alertes,
-            mot de passe oublié). Vérifier : docker compose ps postfix ;
-            docker compose logs --since 10m postfix. Redémarrage : docker compose up -d postfix.
+            Le conteneur stalwart (relai SMTP sortant) n'est plus vu par
+            cAdvisor. Les emails sont en attente côté application : le Mailer
+            Symfony, la console Dagu, le forum et les scripts hôte pointent tous
+            sur « stalwart:2525 ». Le conteneur vit dans un autre dépôt : les
+            trois commandes se jouent dans /opt/yabiladi-mailer, pas ici —
+            docker compose ps stalwart ; docker compose logs --since 10m
+            stalwart ; docker compose up -d stalwart. Si l'étiquette « service »
+            est absente des séries, c'est que le nom du conteneur ne suit plus
+            la convention Compose (voir docker/prometheus/prometheus.yml). Cette
+            règle ne regarde que la machine de la pile : sur « tarourt », la
+            seconde instance du relai, aucune antenne ne récolte ni logs ni
+            conteneurs — c'est « ./deploy.sh --check » là-bas qui répond.
 
       - uid: container-facturation-php-down
         title: Facturation PHP arrêté

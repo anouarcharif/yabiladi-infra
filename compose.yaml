@@ -3,12 +3,13 @@ name: yabiladi-infra
 # ============================================================================
 # Infrastructure commune de la pile Yabiladi.
 #
-# Ce dépôt ne contient AUCUNE application : il tient les quatre services que
-# tous les projets partagent — le proxy inverse (Traefik), le relais SMTP
-# sortant (Postfix), la brique de géolocalisation (geoipupdate), la console de
-# sauvegarde (DBackup) — et les deux piles de mesure qui ne quittent jamais
-# l'hôte (Loki/Alloy/Grafana d'un côté, Prometheus/node_exporter/cAdvisor de
-# l'autre).
+# Ce dépôt ne contient AUCUNE application : il tient les trois services que
+# tous les projets partagent — le proxy inverse (Traefik), la brique de
+# géolocalisation (geoipupdate), la console de sauvegarde (DBackup) — et les deux
+# piles de mesure qui ne quittent jamais l'hôte (Loki/Alloy/Grafana d'un côté,
+# Prometheus/node_exporter/cAdvisor de l'autre). Le relai SMTP sortant, qui y
+# vivait depuis le découpage, en est sorti le 2026-11-19 : c'est le projet
+# « yabiladi-mailer » (Stalwart), branché sur le même réseau partagé.
 #
 # Déploiement : « ./deploy.sh » ici, puis « ./deploy.sh » dans chaque projet.
 # Aucun deploy.sh n'en pilote un autre (règle de la pile) : celui-ci s'arrête
@@ -38,7 +39,7 @@ name: yabiladi-infra
 #
 # Les chemins « ./docker/… » et « ./tools/… » de ce fichier supposent les
 # déménagements faits par « git mv » depuis le site : docker/{traefik,alloy,loki,
-# grafana,prometheus,postfix,secrets,dbackup} et tools/{backup,logging}. Les
+# grafana,prometheus,secrets,dbackup} et tools/{backup,logging}. Les
 # montages qui désignent une donnée du site ne passent plus par une racine de
 # dépôt : les médias et les images de l'éditeur vivent dans l'arbre V1 encore en
 # service, hors du clone, et se déclarent par les deux variables du site
@@ -1050,82 +1051,18 @@ services:
     logging: *docker-logs
     restart: unless-stopped
 
-  # Relais SMTP sortant, unique. Depuis que le Postfix Debian de tarourt
-  # (57.128.22.220) est retiré, CE conteneur est le seul point de sortie de la
-  # pile, sur imouzzer (57.128.22.216) : il sert aux conteneurs du réseau
-  # « app » (php, dagu, facturation, mediakit), à Grafana, à l'hôte lui-même et,
-  # par le port 25 publié, aux machines déclarées dans POSTFIX_RELAY_NETWORKS —
-  # donc au V1 CakePHP et aux shells de tarourt, dont le « mail() » et le
-  # « mail -s » n'ont plus de démon local.
-  #
-  # Il n'accepte aucun mail entrant pour un tiers : « permit_mynetworks,
-  # reject_unauth_destination ». Il remet réellement — une alerte testée part à
-  # sa vraie destinataire — et il signe lui-même (OpenDKIM, voir
-  # docker/postfix/entrypoint.sh), ce que le signer de Symfony ne fait pas pour
-  # le courrier qui ne vient pas de Symfony.
-  postfix:
-    build:
-      context: docker/postfix
-    environment:
-      # Le nom HELO doit être le PTR de l'IP qui sort : sans ce lien, chaque
-      # destinataire marquant la divergence fait grossir la file en silence.
-      POSTFIX_MYHOSTNAME: ${POSTFIX_MYHOSTNAME:-imouzzer.yabiladi.com}
-      # Machines extérieures autorisées à soumettre. « 57.128.22.220/32 » : le
-      # V1 de tarourt, dont le relais pointe désormais ici.
-      POSTFIX_RELAY_NETWORKS: ${POSTFIX_RELAY_NETWORKS:-}
-      OPENDKIM_DOMAIN: ${OPENDKIM_DOMAIN:-yabiladi.com}
-      OPENDKIM_SELECTOR: ${OPENDKIM_SELECTOR:-mail}
-      # 1 = ce relais est le seul expéditeur de la machine et doit donc signer :
-      # sans clé montée, l'entrypoint écrit une ligne « fatal: » et le
-      # healthcheck rend le conteneur unhealthy, au lieu d'accepter en silence un
-      # courrier non signé. À 0 (défaut de l'image), l'absence de clé reste le
-      # comportement normal d'un poste de développement.
-      POSTFIX_DKIM_REQUIRED: ${POSTFIX_DKIM_REQUIRED:-0}
-    networks:
-      - app
-    ports:
-      # Publication sur une adresse explicite, avec un défaut en boucle
-      # locale : une variable de machine non remplie ne transforme jamais ce
-      # relais en port 25 ouvert sur Internet. La cible, elle, met l'IP de la
-      # machine — sinon tarourt n'a rien à joindre et son retrait de Postfix
-      # Debian casse le courrier du site.
-      #
-      # Contrôles du jour J : « docker port yabiladi-infra-postfix-1 » doit
-      # rendre l'adresse attendue, et une soumission depuis tarourt doit faire
-      # apparaître 57.128.22.220 dans le journal de ce conteneur comme adresse
-      # du client. Un journal qui montre une adresse du réseau Docker signifie
-      # que le NAT a masqué la source et que « POSTFIX_RELAY_NETWORKS » ne
-      # désigne pas ce que Postfix voit.
-      - "${POSTFIX_PUBLISH_ADDRESS:-127.0.0.1}:25:25"
-    volumes:
-      # File d'attente conservée entre deux redémarrages : un message accepté
-      # puis non remis ne doit pas disparaître au redéploiement.
-      - postfix_spool:/var/spool/postfix
-      # Les clés privées DKIM de la machine, en lecture seule : c'est le même
-      # dossier hôte que celui que monte le conteneur php du site, donc le relais
-      # signe avec la clé déjà publiée au DNS (sélecteur « mail »), pas une
-      # seconde. Le chemin conteneur n'est PAS /run/opendkim — ce dossier doit
-      # rester inscriptible pour le pid du démon (voir docker/postfix/entrypoint.sh).
-      # Sans clé (poste de développement), l'entrypoint s'en contente et le
-      # courrier part non signé, comme avant.
-      - ${OPENDKIM_KEYS_DIR:-/etc/opendkim/keys}:/opt/dkim-keys:ro
-    healthcheck:
-      # Le script, et non « postfix status » : mesuré sur le poste, ce dernier
-      # écrit 2 880 lignes de journal par jour dans Loki et rend le service
-      # healthy ou non sans rien dire d'autre. healthcheck.sh vérifie la file,
-      # la présence du démon et l'état de la signature.
-      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    logging: *docker-logs
-    restart: unless-stopped
+  # Le relai SMTP sortant n'est plus ici : depuis le 2026-11-19, c'est le projet
+  # « yabiladi-mailer » (Stalwart) qui se branche sur le réseau partagé « app » et
+  # publiera le 25 à la place de ce conteneur. Le service, son image et leurs
+  # variables (POSTFIX_*, OPENDKIM_*) sont retirés ; le volume
+  # « yabiladi_postfix_spool » reste sur la machine sans être déclaré ici, pour ne
+  # pas perdre ce que la file du relais pourrait encore contenir. Les gestes
+  # d'exploitation du nouveau relai sont dans Yabiladi-Mailer/docs/OPERATIONS.md.
 
 # ---------------------------------------------------------------------------
 # Volumes. Chacun porte son nom physique et se déclare « external: true » : ils
 # existent déjà sur les machines sous le projet commun « yabiladi », et détruire
-# un magasin ACME, une base DBackup ou la file Postfix pour une raison de
+# un magasin ACME ou une base DBackup pour une raison de
 # rangement de fichiers serait une perte réelle, pas un détail.
 #
 # « external: true » plutôt que « name: » seul : la scission ne doit JAMAIS
@@ -1134,11 +1071,6 @@ services:
 # joue « docker volume create » avant le premier « up -d ».
 # ---------------------------------------------------------------------------
 volumes:
-  # File d'attente Postfix : un message accepté puis non remis survit au
-  # redéploiement (voir le service plus haut).
-  postfix_spool:
-    external: true
-    name: yabiladi_postfix_spool
   traefik_acme:
     external: true
     name: yabiladi_traefik_acme

@@ -29,7 +29,8 @@ que le clair est hors git.
 
 **Volontairement dehors** (et pourquoi) : `deploy/secrets.manifest`, section finale — mot de passe
 admin Grafana (regénéré sur la machine, sans effet après l'initialisation de la base), clé DKIM
-(montée depuis `/etc/opendkim/keys` du V1), `compose.override.yaml` (configuration par machine,
+(elle appartient au projet `Yabiladi-Mailer`, qui l'écrit sous son `KEYS_HOST_DIR` et ne la
+partage avec personne), `compose.override.yaml` (configuration par machine,
 aucun secret dedans).
 
 ## Une machine neuve : une seule opération, une seule fois
@@ -59,11 +60,12 @@ conteneurs — chaque projet a son propre fichier Compose et son nom de projet.
 
 | Depuis | Ce qui est déployé | Emplacement sur la cible |
 |---|---|---|
-| `Yabiladi-Infra/` (ce dépôt) | Traefik, DBackup, Loki/Alloy/Grafana, Prometheus/cAdvisor/node-exporter, Postfix, geoipupdate | `/opt/yabiladi-infra` |
+| `Yabiladi-Infra/` (ce dépôt) | Traefik, DBackup, Loki/Alloy/Grafana, Prometheus/cAdvisor/node-exporter, geoipupdate | `/opt/yabiladi-infra` |
 | `Yabiladi-V2-Symfony/` | site, forum, Dagu (horloge de toute la pile), Navidrome, nginx | `/opt/yabiladi-symfony` |
 | `Yabiladi-Mediakit-V2/` | `pub.yabiladi.com` : `mediakit-php`/`-nginx`, cache, PDF, contrôles | `/opt/yabiladi-mediakit` |
 | `Yabiladi-Facturation-V2/` | `ws.yabiladi.com` : `facturation-php`/`-nginx`, cache, contrôles | `/opt/yabiladi-facturation` |
 | `Yabiladi-Radio-V2/` | les quatre antennes SHOUTcast : `radio-{yabiladi,chaabi,azawan,nayda}`, ports 8000/8100/9000/9100, point de contrôle 9600 interne | `/opt/yabiladi-radio` |
+| `Yabiladi-Mailer/` | le relai SMTP sortant (Stalwart) — le 25 qui quittait ce dépôt le 2026-11-19 ; deux instances indépendantes, une par machine | `/opt/yabiladi-mailer`, sur `tarourt` ET sur `imouzzer` |
 
 ```bash
 bash deploy.sh                                   # la pile, et elle seule
@@ -71,6 +73,7 @@ cd ../Yabiladi-V2-Symfony    && bash deploy.sh   # site + Dagu + Navidrome
 cd ../Yabiladi-Mediakit-V2   && bash deploy.sh   # médiakit seulement
 cd ../Yabiladi-Facturation-V2 && bash deploy.sh  # intranet seulement
 cd ../Yabiladi-Radio-V2      && bash deploy.sh   # les quatre antennes
+cd ../Yabiladi-Mailer        && bash deploy.sh --install   # le relai, APRÈS le site : il rejoint « yabiladi_app »
 ```
 
 La pile se déploie en premier : les quatre autres déclarent ses réseaux (`app`, `logging`)
@@ -89,7 +92,10 @@ porte désormais les cinq. L'étiquette `service` de Loki, elle, vient de l'éti
 `com.docker.compose.service` (`docker/alloy/config.alloy`) et ne bouge pas au changement de
 projet : c'est pour cela que seules les règles Prometheus sont concernées.
 
-Les cinq acceptent `--build`, `--secrets`, `--encrypt` et `--verify`. Chacun ne matérialise
+Les cinq premiers acceptent `--build`, `--secrets`, `--encrypt` et `--verify` ; le
+relai n'a pas de bloc dans le coffre — ses verbes à lui sont `--check`,
+`--bootstrap`, `--install` et `--verify`, et sa seule pièce hors dépôt est le
+dossier de clés DKIM. Chacun des cinq ne matérialise
 que ses propres blocs du coffre, par la colonne `project` du manifeste puis, sauf pose
 explicite de `SECRETS_ONLY`, par la liste par défaut de son script : `env.local,dbackup,geoip,htpasswd,grafana-admin`
 ici, `env.local.site,credentials,ui-sync` côté site, `facturation.env` et `mediakit.env` de

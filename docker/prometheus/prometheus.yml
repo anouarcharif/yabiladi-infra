@@ -32,8 +32,9 @@
 #     répond à cette question.
 #
 #   - aucun bloc « alerting: » ni « rule_files: ». Les règles vivent dans
-#     docker/grafana/provisioning/alerting, déjà branchées sur Postfix et sur le
-#     destinataire. Une seconde machine à notifier les mêmes séries produirait
+#     docker/grafana/provisioning/alerting, déjà branchées sur le destinataire
+#     (leur contact point « email » sort par Resend, pas par le relai de la
+#     machine). Une seconde machine à notifier les mêmes séries produirait
 #     deux files de mails dont on ne sait pas laquelle fait foi.
 #
 # Le « $1 » d'un « replacement » plus bas n'est pas une référence

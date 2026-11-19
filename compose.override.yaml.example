@@ -186,40 +186,9 @@ services:
   # Ce qu'on ne règle qu'exceptionnellement, et pourquoi c'est commenté ici.
   # ---------------------------------------------------------------------------
 
-  # postfix:
-  #   ports: !override
-  #     # Le .env versionné publie le 25 sur POSTFIX_PUBLISH_ADDRESS, l'IP
-  #     # primaire de la cible — une adresse que ne possède aucune autre machine,
-  #     # et Docker refuse alors le démarrage du service. « !override » est
-  #     # nécessaire, mesuré sur Compose 5.6.1 : deux listes de ports se
-  #     # FUSIONNENT par défaut, l'entrée de la cible survivrait à l'override.
-  #     # En boucle locale le relais sert quand même les conteneurs du réseau
-  #     # « app » : ils l'atteignent par le réseau Docker, jamais par ce port.
-  #     - "127.0.0.1:25:25"
-  #   environment:
-  #     # HELO du relais : par défaut le nom dont le PTR est l'IP sortante de la
-  #     # cible (« imouzzer.yabiladi.com »). Sur un poste de développement,
-  #     # l'IP sortante est celle de la box ou du fourreau VPN, et son PTR ne
-  #     # rend jamais ce nom : le destinataire marque la divergence, et la file
-  #     # Postfix grossit sans qu'aucune erreur ne s'affiche — c'est le réglage
-  #     # qu'un poste doit le plus souvent connaître.
-  #     POSTFIX_MYHOSTNAME: <nom-dont-le-PTR-est-celui-de-l-ip>
-  #     # La cible exige la signature : sans clé, le conteneur s'y déclare
-  #     # unhealthy et écrit un « fatal: » qui réveille l'alerte Grafana. Chez un
-  #     # poste, la clé n'existe pas — sans ce 0, chaque démarrage crierait une
-  #     # absence qui n'est pas une panne.
-  #     POSTFIX_DKIM_REQUIRED: 0
-  #     # Machines extérieures autorisées à soumettre. Inutile en local : les
-  #     # conteneurs du réseau « app » sont déjà couverts par les réseaux des
-  #     # interfaces, calculés au démarrage.
-  #     # POSTFIX_RELAY_NETWORKS: 57.128.22.220/32
-  #   volumes:
-  #     # Le dossier de clés du poste, si la clé n'est pas à « /etc/opendkim/keys ».
-  #     # Sans clé au chemin monté, l'entrypoint démarre le relais non signé et
-  #     # l'état de la signature reste « off » : c'est le comportement attendu
-  #     # ici, pas une panne — mais un courrier de test envoyé à Gmail y partira
-  #     # en spam, et ce n'est pas le code qu'il faut chercher.
-  #     - ./docker/postfix/keys:/opt/dkim-keys:ro
+  # Le relai SMTP n'est plus un service de ce dépôt (retrait du 2026-11-19,
+  # remplacé par le projet « yabiladi-mailer ») : ses surcharges de poste se
+  # déclarent dans Yabiladi-Mailer/.env.local, pas ici.
 
   # traefik:
   #   ports:

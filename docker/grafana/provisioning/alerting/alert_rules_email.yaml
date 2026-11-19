@@ -1,55 +1,89 @@
 apiVersion: 1
 
-# Règles d'alerte sur les rebonds du relais Postfix (emails sortants).
+# Règles d'alerte sur les envois du relai Stalwart (emails sortants).
 #
-# D'OÙ VIENNENT LES MOTIFS. Toutes les expressions ci-dessous ont été exécutées
-# contre les journaux réels de {service="postfix"} (maillog_file=/dev/stdout,
-# docker/postfix/main.cf) : chaque tentative de remise y laisse une ligne
-#   postfix/smtp[pid]: ID: to=<adresse>, relay=..., delay=..., dsn=5.7.1,
-#     status=bounced (host ... said: 550-5.7.1 ...)
-# d'où sont tirés « status=bounced », « dsn=5.7. », et le domaine de to=<…>.
-# Le dashboard en face est docker/grafana/dashboards/applications/
-# yabiladi-email-delivery.json : les règles disent « ça casse », la page dit
-# « sur quel domaine et avec quel code ».
+# D'OÙ VIENNENT LES MOTIFS. Le 2026-11-19, le relai a quitté ce dépôt pour le
+# projet « yabiladi-mailer » (Stalwart), et les cinq règles ci-dessous ont été
+# réécrites contre les lignes que CE serveur écrit vraiment. La forme mesurée
+# (sonde locale du 2026-11-19, destinataire en « .invalid », puis un 550 réel de
+# Google contre l'IP du poste de développement) :
 #
-# POURQUOI « dsn=5.7. » A UN SEUIL DE ZÉRO. 5.7.x est la classe « politique de
+#   … INFO Queued message for delivery (queue.message-queued) … queueId = 3414…,
+#     from = "webmaster@yabiladi.com", to = ["sonde@domaine-….invalid"], size = 503,
+#     nextRetry = …, nextDsn = …, expires = …
+#   … INFO MX record lookup failed (delivery.mx-lookup-failed) … domain = "domaine-….invalid",
+#     details = "No MX records were found, attempting implicit MX.", elapsed = 0ms
+#   … INFO DSN permanent failure notification (delivery.dsn-perm-fail) …
+#     to = "sonde@domaine-….invalid", hostname = "…", details = "…", total = 0
+#   … INFO Message rejected by remote server (delivery.message-rejected) …
+#     hostname = "aspmx.l.google.com", code = 550, details = "… 5.7.1 …"
+#   … INFO DSN permanent failure notification (delivery.dsn-perm-fail) … details =
+#     "Unexpected response for BDAT 4647 LAST: Code: 550, Enhanced code: 5.7.1, Message: …"
+#   … INFO Discarding message after double bounce (delivery.double-bounce) …
+#
+# C'est-à-dire : « horodatage NIVEAU texte (nom.evenement) cle = valeur, … ». Une
+# ligne par événement, pas de JSON (le traceur Stdout n'a aucun champ « format »).
+# Les motifs « status=bounced », « status=deferred » et « delay= » de l'ère
+# Postfix ne transposent pas : ils ne sont pas réutilisables ici, et les remplacements
+# sont choisis événement par événement, pas traduit mot à mot.
+#
+# POURQUOI DES MOTIFS « |= » ET PAS DES « |~ » À PARENTHÈSES ÉCHAPPÉES. Le nom
+# d'événement est entouré de parenthèses dans la ligne, et LogQL refuse
+# « \( » dans une chaîne : mesuré le 2026-11-19 sur le Loki de la pile,
+# « {service="stalwart"} |~ "\(delivery\.dsn-perm-fail\)" » répond
+# « parse error at line 1, col 25: invalid char escape » — la règle ne serait
+# pas fausse, elle serait MORTE à l'exécution (et « execErrState: OK » s'en
+# tairait). D'où le filtre de sous-chaîne « |= "delivery.dsn-perm-fail" », qui
+# attrape le nom avec ses deux parenthèses sans jamais les demander au
+# compilateur. Les six expressions de ce fichier ont été jouées contre Loki le
+# 2026-11-19 sur la sonde décrite plus haut : la règle de politique rend 1,
+# celle de volume 1, le double rebond 1, et le groupage par domaine rend
+# exactement « domaine-inexistant-20261119.invalid » et « yabiladi.com ».
+#
+# CE QUE CES RÈGLES NE PEUVENT PAS VOIR, et qui a coûté une règle. Deux trous sont
+# structurels, pas des oublis :
+#   - aucune jauge de file. Mesuré dans le rendu Prometheus du serveur : aucun nom
+#     contenant « queue », « out » ni « message ». La profondeur de la file différée
+#     ne se lit donc ni ici ni dans un tableau de bord ; « postqueue -p » n'existe
+#     pas non plus. La règle d'ÂGE du message (« delay= », l'accumulé Postfix) est
+#     morte pour cette raison : Stalwart écrit des échéances (« nextRetry »,
+#     « expires »), jamais un âge cumulé, et rien ne renouvelle une ligne pendant
+#     qu'un message dort. Elle est remplacée par la règle de DOUBLE REBOND, qui
+#     signe la même panne à son terme — le message est perdu et personne ne le sait.
+#   - les compteurs de remise Prometheus ne portent AUCUNE étiquette de domaine.
+#     Le seul endroit où un domaine destinataire existe est la ligne de journal,
+#     d'où la règle « email-rebond-domaine » jouée sur Loki avec une extraction,
+#     et non sur un « sum by (domain) ».
+#
+# POURQUOI « 5.7. » A ENCORE UN SEUIL DE ZÉRO. 5.7.x est la classe « politique de
 # sécurité » du destinataire : IP non autorisée par SPF, DMARC en échec, message
-# refusé comme spam, relais non accepté. Un seul de ces rejets vient d'être
-# produit par notre configuration ou notre réputation — il n'y a aucune raison
-# d'attendre qu'ils s'accumulent, et chacun est reproductible à la demande par
-# la recette du to-do. 5.1.1 (boîte inconnue) est volontairement exclu de cette
-# règle : c'est un défaut d'adresse du destinataire, pas un défaut de notre
-# côté, et il est couvert par la règle de volume.
+# refusé comme spam, relais non accepté. Un seul de ces rejets vient de notre
+# configuration ou de notre réputation. Le motif porte sur la ligne
+# « delivery.dsn-perm-fail » parce que c'est là que le code étendu est écrit :
+# mesuré, « details = "… Enhanced code: 5.7.1, Message: …" ». La ligne sœur
+# « delivery.message-rejected » porte « code = 550 » sans code étendu, elle ne
+# serait pas filtrable par classe.
 #
 # POURQUOI UN SEUIL DE VOLUME À CINQ. Un ou deux 5.1.1 par jour sont normaux
 # (adresse saisie de travers dans un formulaire). Au-delà de cinq en un quart
-# d'heure, c'est une liste ou un lot : newsletter partie avec des adresses
-# mortes, formulaire qui renvoie une adresse erronée, ou blocage de réputation
-# qui bascule les rejets en 5.x. Le seuil est un choix d'exploitation, pas une
-# mesure.
-#
-# CE QUE CES RÈGLES VOIENT. Les deux règles « email-defere-* » comptent ce que la
-# règle de rebond laisse passer : un message pas encore remis (status=deferred),
-# que Postfix réessaie. Chaque tentative laisse une ligne
-#   postfix/smtp[pid]: ID: to=<adresse>, relay=none, delay=114,
-#     delays=114/0.05/0/0, dsn=4.4.1, status=deferred (…)
-# et le champ « delay= » est l'ÂGE CUMULÉ du message depuis son arrivée, mesuré en
-# secondes (114 sur la deuxième tentative du test du 2026-11-17). C'est ce nombre,
-# pas le volume de lignes, qui répond à « est-ce que le courrier dort ».
-#
-# CE QUI LEUR ÉCHAPPE. La profondeur brute de file n'est pas journalisée : elle se
-# lit par « docker compose exec postfix postqueue -p » sur le serveur. Et une ligne
-# n'est pas un message — une tentative écrit une ligne par destinataire. Enfin, le
-# rythme des tentatives n'est pas régulier : il double à chaque échec
-# (minimal_backoff_time = 300 s, puis 600, 1200, …) jusqu'à maximal_backoff_time =
-# 4000 s, soit 66 min (valeurs rendues par « postconf -h » dans le conteneur). La
-# fenêtre de la règle d'âge est donc de 75 min : plus longue que le plus grand
-# écart possible entre deux lignes d'un même message bloqué, pour qu'une file
-# muette ne se déclare pas saine entre deux tentatives.
+# d'heure, c'est une liste ou un lot. Le seuil est un choix d'exploitation, pas
+# une mesure.
 #
 # LE DOSSIER. « Applications » est créé par le fournisseur de tableaux de bord
 # (docker/grafana/provisioning/dashboards/logging.yaml) ; c'est le nom qu'attend
 # « folder: » ici, jamais un folderUid (voir README.md, mesures sur 13.3.0).
+#
+# FANTÔMES. Le provisioning est un upsert, pas une synthèse (README, § « Retirer
+# un fichier ne retire pas ses règles ») : « email-defere-age » et
+# « email-defere-volume » survivraient à leur réécriture sous leurs anciens UID,
+# l'une sur un motif qui ne s'écrit plus, l'autre avec un seuil hérité. Elles sont
+# supprimées par « deleteRules » ci-dessous.
+deleteRules:
+  - orgId: 1
+    uid: email-defere-age
+  - orgId: 1
+    uid: email-defere-volume
+
 groups:
   - orgId: 1
     name: emails-sortants
@@ -59,7 +93,9 @@ groups:
       # ---------------------------------------------------------------------
       # Rejet pour politique ou authentification : la classe 5.7.x. C'est la
       # règle qui aurait sonné le jour du test vers Gmail depuis le poste de
-      # développement (550-5.7.1 « IP you're using ... is not authorized »).
+      # développement — mesuré le 2026-11-19, elle sonne vraiment :
+      # « Enhanced code: 5.7.1 … The IP you're using to send mail is not
+      # authorized ».
       # ---------------------------------------------------------------------
       - uid: email-rebond-politique
         title: Emails — rejet définitif pour politique ou authentification
@@ -70,7 +106,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum(count_over_time({service="postfix"} |= "status=bounced" |= "dsn=5.7." [15m]))'
+              expr: 'sum(count_over_time({service="stalwart"} |= "delivery.dsn-perm-fail" |= "code: 5.7." [15m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -106,22 +142,20 @@ groups:
           summary: Un destinataire refuse nos messages pour politique ou authentification
           description: >-
             Le MX a répondu 5.7.x : IP non autorisée (SPF), DMARC en échec, ou
-            message classé indésirable. Lire la ligne du rejet dans le dashboard
-            « Emails sortants » (panneau « Rejets définitifs ») : le texte du
-            serveur dit lequel des trois. Vérifier ensuite, dans cet ordre et
-            dans le dépôt Yabiladi-Infra (c'est là qu'est le relais depuis le
-            découpage modulaire) : docker compose exec postfix postconf -h
-            myhostname doit rendre imouzzer.yabiladi.com, nom dont le PTR est
-            l'IP 57.128.22.216 dont part le courrier ; docker compose exec
-            postfix cat /run/opendkim.state doit rendre « on » (« broken » = le
-            milter est mort, « unsigned » = aucune clé alors que le relais se
-            déclare seul expéditeur, « off » = poste de développement) ; docker
-            compose exec postfix postconf -h smtpd_milters doit nommer
-            inet:127.0.0.1:8891. Puis les trois verdicts SPF/DKIM/DMARC d'un
-            envoi de test (docker compose exec -T php php bin/console
-            mailer:test <adresse> --from=webmaster@yabiladi.com, dans le dépôt
-            du site). Un rejet en 5.7.1 accompagné de « not authorized » vient
-            de l'IP ou du SPF, pas du contenu.
+            message classé indésirable. La ligne complète — le texte du serveur,
+            qui dit lequel des trois — se lit dans le dashboard « Emails
+            sortants » (panneau « Rejets définitifs »), ou en direct :
+            « docker compose logs --since 30m stalwart | grep dsn-perm-fail »
+            dans /opt/yabiladi-mailer. Vérifier ensuite, dans cet ordre :
+            l'hélice du relai (./deploy.sh --check puis --verify dans ce même
+            dépôt, qui rendent le nom publié, l'écouteur et l'empreinte de la clé
+            DKIM), l'alignement de l'enveloppe (le site impose
+            webmaster@yabiladi.com par framework.mailer.envelope.sender), et le
+            verdict SPF/DKIM/DMARC d'un envoi de test
+            (docker compose exec -T php php bin/console mailer:test <adresse>
+            --from=webmaster@yabiladi.com, dans le dépôt du site). Un 5.7.1
+            accompagné de « not authorized » vient de l'IP ou du SPF, pas du
+            contenu.
       # ---------------------------------------------------------------------
       # Volume : tous les rejets définitifs, classe confondue.
       # ---------------------------------------------------------------------
@@ -134,7 +168,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum(count_over_time({service="postfix"} |= "status=bounced" [15m]))'
+              expr: 'sum(count_over_time({service="stalwart"} |= "delivery.dsn-perm-fail" [15m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -170,12 +204,13 @@ groups:
           summary: Plus de cinq rejets définitifs en un quart d'heure
           description: >-
             Trop de messages sont refusés pour que ce soit le hasard d'une
-            adresse mal saisie. Regarder « Codes SMTP des rejets » dans le
-            dashboard : si la classe dominante est 5.1.x, un lot contient des
-            adresses mortes (newsletter, formulaire) ; si c'est 5.7.x, voir la
-            règle de politique. Un pic isolé après un envoi de masse est normal
-            sur quelques adresses ; le même pic qui se répète à chaque lot ne
-            l'est pas.
+            adresse mal saisie. Regarder « Codes SMTP des rejets » et le
+            panneau par domaine dans le dashboard : si la classe dominante est
+            5.1.x, un lot contient des adresses mortes (newsletter, formulaire) ;
+            si c'est 5.7.x, voir la règle de politique. Un pic isolé après un
+            envoi de masse est normal sur quelques adresses ; le même pic qui se
+            répète à chaque lot ne l'est pas. Une ligne n'est pas un message :
+            Stalwart en écrit une par destinataire, comme Postfix.
       # ---------------------------------------------------------------------
       # Un domaine destinataire qui refuse systématiquement : c'est ainsi
       # qu'apparaît un blocage de réputation (Yahoo, Outlook) avant qu'il ne
@@ -190,7 +225,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum by (domain) (count_over_time({service="postfix"} |= "status=bounced" | regexp "to=<[^@>]+@(?P<domain>[^>]+)>" [15m]))'
+              expr: 'sum by (domain) (count_over_time({service="stalwart"} |= "delivery.dsn-perm-fail" | regexp "to = \"[^\"]*@(?P<domain>[^\"@]+)\"" [15m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -227,41 +262,36 @@ groups:
           description: >-
             Plusieurs destinataires d'un même domaine refusent nos messages :
             c'est la signature d'un blocage côté destinataire (réputation de
-            l'IP ou du domaine), pas d'adresses fausses une par une. Lire le
-            texte du 550 dans « Rejets définitifs » : « TSS04 » ou « blocked »
-            chez Yahoo, « 5.7.26 » ou « spam » chez Gmail, « 5.7.1 not
-            authorized » renvoie à l'IP et au SPF. Un déblocage se demande au
-            POSTMASTER du destinataire ou à l'hébergeur, pas dans ce dépôt ;
-            entre-temps, un envoi de masse vers ce domaine est à suspendre
-            plutôt qu'à répéter, chaque rejet aggravant la réputation.
+            l'IP ou du domaine), pas d'adresses fausses une par une. Le domaine
+            est extrait du champ « to = "…" » de la ligne, qui vient après
+            « from = » : une extraction qui partirait du premier « @ » de la
+            ligne rendrait NOTRE domaine, pas celui du destinataire (mesuré sur
+            la ligne du 2026-11-19). Lire le texte du 550 dans « Rejets
+            définitifs » : « TSS04 » ou « blocked » chez Yahoo, « 5.7.26 » ou
+            « spam » chez Gmail, « 5.7.1 not authorized » renvoie à l'IP et au
+            SPF. Un déblocage se demande au POSTMASTER du destinataire ou à
+            l'hébergeur, pas dans ce dépôt ; entre-temps, un envoi de masse vers
+            ce domaine est à suspendre plutôt qu'à répéter, chaque rejet
+            aggravant la réputation.
       # ---------------------------------------------------------------------
-      # L'âge du doyen de la file. C'est la règle qui répond à « est-ce que le
-      # courrier dort » : le champ delay= d'une ligne status=deferred est
-      # l'accumulé depuis l'arrivée du message, mesuré 114 à la deuxième
-      # tentative du test du 2026-11-17. Un message de service (réinitialisation
-      # de mot de passe, confirmation d'inscription) qui a une heure est un
-      # échec visible de l'utilisateur, quand bien même Postfix réessaiera
-      # jusqu'à cinq jours.
-      #
-      # La fenêtre de 75 min n'est pas un arrondi : maximal_backoff_time vaut
-      # 4000 s (66 min), donc un message bloqué peut espacer ses lignes de 66
-      # min. Une fenêtre plus courte laisserait la règle retomber à OK alors que
-      # la file est toujours pleine.
+      # Le double rebond : le message est mort ET son avis de retour est mort
+      # aussi. C'est la panne que la règle d'âge couvrait chez Postfix — voir
+      # l'en-tête pour pourquoi l'âge n'est plus mesurable ici.
       # ---------------------------------------------------------------------
-      - uid: email-defere-age
-        title: Emails — un message attend sa remise depuis plus d'une heure
+      - uid: email-double-bounce
+        title: Emails — un message perdu n'a même pas pu prévenir son expéditeur
         condition: C
         data:
           - refId: A
-            relativeTimeRange: { from: 4500, to: 0 }
+            relativeTimeRange: { from: 900, to: 0 }
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'max(max_over_time({service="postfix"} |= "status=deferred" | regexp "delay=(?P<defer_delay>[0-9.]+)" | unwrap defer_delay [75m]))'
+              expr: 'sum(count_over_time({service="stalwart"} |= "delivery.double-bounce" [15m]))'
               queryType: instant
               refId: A
           - refId: B
-            relativeTimeRange: { from: 4500, to: 0 }
+            relativeTimeRange: { from: 900, to: 0 }
             datasourceUid: __expr__
             model:
               type: reduce
@@ -270,7 +300,7 @@ groups:
               refId: B
               datasource: { type: __expr__, uid: __expr__ }
           - refId: C
-            relativeTimeRange: { from: 4500, to: 0 }
+            relativeTimeRange: { from: 900, to: 0 }
             datasourceUid: __expr__
             model:
               type: threshold
@@ -282,7 +312,7 @@ groups:
                   query: { params: [B, 0, last] }
                   operator: { type: and }
                   reducer: { type: now, params: [] }
-                  evaluator: { type: gt, params: [3600] }
+                  evaluator: { type: gt, params: [0] }
         noDataState: OK
         execErrState: OK
         for: 0m
@@ -290,35 +320,28 @@ groups:
           severity: critical
           team: email
         annotations:
-          summary: Le plus ancien message en file a plus d'une heure
+          summary: Un rebut a été jeté après un second échec (double rebond)
           description: >-
-            Un message n'est toujours pas remis et Postfix le réessaie : ce n'est
-            pas un rebond, c'est une attente. Lire la file et l'âge réel sur le
-            serveur, dans le dépôt Yabiladi-Infra : docker compose exec postfix
-            postqueue -p (la ligne « (Reason: …) » donne le motif du dernier
-            échec) puis docker compose logs --since 75m postfix | grep
-            "status=deferred". Un seul destinataire concerné = adresse ou domaine
-            joignable mais refusant doucement (gris-listing, MX de secours) ; des
-            dizaines de « Requests » = plus général — résoudre le nom (docker
-            compose exec postfix postconf -h relayhost), joindre l'IP du MX, ou
-            vérifier que le 25 SORTANT n'est pas coupé chez l'hébergeur. Ne pas
-            vider la file pour faire taire l'alerte : postsuper -d efface le seul
-            endroit où le message existe encore.
+            « delivery.double-bounce » (mesuré : « Discarding message after
+            double bounce ») veut dire que le destinataire était injoignable ET
+            que l'avis de retour, adressé à l'enveloppe d'envoi, a été refusé à
+            son tour. Le message est perdu sans que personne n'en soit prévenu.
+            Sur nos envois applicatifs, l'enveloppe est
+            webmaster@yabiladi.com (framework.mailer.envelope.sender) : un double
+            rebond signifie donc le plus souvent que Google/le MX de
+            yabiladi.com refuse notre IP — exactement ce que la règle de
+            politique attrape en amont. Les deux lignes (le rebut et son motif)
+            se lisent ensemble : « docker compose logs --since 30m stalwart |
+            grep -E "dsn-perm-fail|double-bounce" » dans /opt/yabiladi-mailer.
       # ---------------------------------------------------------------------
-      # Le volume des tentatives différées : la file qui grossit maintenant,
-      # avant que le premier de ces messages n'ait une heure. Séparée de la
-      # règle d'âge parce que les deux ne sonnent pas pour la même panne — un
-      # gris-listing de vingt minutes fait celle-ci sans jamais faire celle-là.
-      #
-      # SEUIL, ET CE QU'IL COMPTE VRAIMENT. Mesuré le 2026-11-17 avec trois
-      # messages volontairement bloqués : 6 lignes « status=deferred » en deux
-      # minutes (une par destinataire, une par tentative). Trente en quinze
-      # minutes = donc plusieurs messages à la fois, pas le hasard d'une
-      # boîte pleine. « for: 5m » filtre la pointe d'un lot de newsletter qui
-      # repart tout seul au réessai suivant.
+      # La file qui grossit : les remises temporaires. Deux événements, lus
+      # dans la taxonomie du binaire (550 noms, « delivery. » 38), jamais
+      # observés sur CETTE machine faute de destinataire qui engris-liste :
+      # au premier pic, vérifier que le nom sort bien avant de croire la règle
+      # verte.
       # ---------------------------------------------------------------------
-      - uid: email-defere-volume
-        title: Emails — plus de trente remises différées en quinze minutes
+      - uid: email-temp-fail-volume
+        title: Emails — plus de trente remises temporaires en quinze minutes
         condition: C
         data:
           - refId: A
@@ -326,7 +349,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum(count_over_time({service="postfix"} |= "status=deferred" [15m]))'
+              expr: 'sum(count_over_time({service="stalwart"} |~ "(delivery.dsn-temp-fail|delivery.connect-error)" [15m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -359,12 +382,82 @@ groups:
           severity: warning
           team: email
         annotations:
-          summary: "La file grossit : plus de trente tentatives différées en un quart d'heure"
+          summary: "La file grossit : plus de trente remises temporaires en un quart d'heure"
           description: >-
             Ce compteur additionne les LIGNES de tentative, pas les messages :
             une remise qui échoue écrit une ligne par destinataire. Un pic qui
             retombe seul est un gris-listing ou un MX momentanément sourd ; un
-            pic qui dure se lit avec docker compose exec postfix postqueue -p,
-            où le nombre de « Requests » donne la taille réelle de la file. Si
-            l'attente se prolonge, la règle « un message attend depuis plus d'une
-            heure » prend le relais, en critique.
+            pic qui dure veut dire que le 25 SORTANT est coupé chez l'hébergeur,
+            que le DNS ne résout plus (« delivery.mx-lookup-failed », qui lui
+            précède normalement ces lignes) ou que l'IP est sur une liste. Ce
+            que la règle ne dit PAS : combien de messages dordent, parce
+            qu'aucune jauge de file n'existe côté Stalwart (en-tête de ce
+            fichier). Les événements de la famille « queue. » portent leurs
+            échéances (« nextRetry », « expires ») : c'est là que se lit, à la
+            main, combien de messages dorment et jusqu'à quand ils seront
+            rejoués.
+      # ---------------------------------------------------------------------
+      # La signature DKIM sortante, côté écriture. Nouvelle règle : Postfix
+      # rendait l'état du milter par un fichier (/run/opendkim.state) et un
+      # état de santé ; Stalwart signe à l'entrée sur le port 2525 et n'expose
+      # rien d'équivalent.
+      # ---------------------------------------------------------------------
+      - uid: email-dkim-signature
+        title: Emails — la signature DKIM sortante a échoué
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: yabiladi-loki
+            model:
+              datasource: { type: loki, uid: yabiladi-loki }
+              expr: 'sum(count_over_time({service="stalwart"} |~ "(dkim|dkim2).(build-error|public-key-error|recipe-error|signature-invalid|custody-broken|timestamp-invalid)" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              datasource: { type: __expr__, uid: __expr__ }
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              conditions:
+                - type: query
+                  query: { params: [B, 0, last] }
+                  operator: { type: and }
+                  reducer: { type: now, params: [] }
+                  evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: OK
+        for: 0m
+        labels:
+          severity: critical
+          team: email
+        annotations:
+          summary: Le relai n'a pas pu signer un message sortant
+          description: >-
+            Le domaine yabiladi.com est en DMARC « p=quarantine pct=100 » : un
+            message qui part sans signature DKIM alignée va en spam, sans que le
+            destinataire ne dise pourquoi. Les noms sélectionnés sont ceux de la
+            FAMILLE qui écrit la signature (dkim. et dkim2. — compter les deux,
+            une règle « dkim.* » est aveugle aux 13 événements de « dkim2. »,
+            mesuré dans la taxonomie du binaire).
+            CE QUE CETTE RÈGLE NE DIT PAS : « smtp.dkim-fail » est un échec de
+            VÉRIFICATION À L'ENTRÉE, pas un défaut de signature sortante —
+            mesuré le 2026-11-19, il sort sur chaque soumission non signée
+            (« strict = false, result = [] »), donc l'y brancherait ferait sonner
+            le relai en permanence. Et un message qui part SANS signature sans
+            que rien ne l'appelle n'a pas d'événement : la preuve se fait sur le
+            message reçu (« DKIM-Signature: d=yabiladi.com; s=mail2 »), ou par
+            ./deploy.sh --check côté Yabiladi-Mailer, qui compare l'empreinte de
+            la clé du magasin au TXT publié.

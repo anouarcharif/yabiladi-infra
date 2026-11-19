@@ -1,6 +1,6 @@
 # Yabiladi-Infra
 
-Infrastructure commune de la pile : Traefik, Postfix, geoipupdate, DBackup,
+Infrastructure commune de la pile : Traefik, geoipupdate, DBackup,
 Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor, et la console
 d'administration Docker sous `docker-admin/` (Portainer, Dozzle, leur mandataire
 de socket). Se déploie en premier (`git pull` puis `./deploy.sh`), chaque projet —

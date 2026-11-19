@@ -1,11 +1,11 @@
 {
   "uid": "yabiladi-email-delivery",
-  "title": "Emails sortants — relais Postfix et remise",
-  "description": "Ce que fait le relais Postfix des messages déposés par php et dagu : volume, statuts SMTP, délais, destinataires, relais MX, codes de rejet — plus les erreurs d'envoi côté application (DKIM, mail()). Tout vient de Loki, journal du conteneur postfix (maillog_file=/dev/stdout) et stderr de php.",
+  "title": "Emails sortants — relai Stalwart et remise",
+  "description": "Ce que fait le relai Stalwart (dépôt Yabiladi-Mailer depuis le 2026-11-19) des messages déposés par php, dagu et les sœurs : volume, événements de remise, destinataires, MX contactés, codes de refus — plus les erreurs d'envoi côté application.",
   "tags": [
     "yabiladi",
     "loki",
-    "postfix",
+    "stalwart",
     "email"
   ],
   "timezone": "browser",
@@ -60,8 +60,8 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Messages déposés",
-      "description": "Une ligne par message accepté par Postfix (postfix/cleanup … message-id=…). Les rebonds générés par le relais lui-même comptent aussi : ce sont des messages, pas des envois applicatifs.",
+      "title": "Messages mis en file",
+      "description": "Une ligne « queue.message-queued » par message que le relai accepte et met en file. Les avis de retour ont leur propre événement (« queue.dsn-queued ») et comptent donc séparément : ce sont des messages, pas des envois applicatifs. Le « message-id= » débité par postfix/cleanup n'existe plus.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -73,7 +73,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"postfix\"} |= \"message-id=\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |= \"queue.message-queued\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -129,7 +129,7 @@
     {
       "type": "stat",
       "title": "Remis",
-      "description": "Tentatives terminées par status=sent : le MX destinataire a accepté le message (2xx).",
+      "description": "Tentatives terminées par « delivery.delivered » : le MX destinataire a accepté le message (mesuré sur la sonde locale : hostname = « probe.test », code = 250, elapsed = 3ms).",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -141,7 +141,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"postfix\"} |= \"status=sent\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |= \"delivery.delivered\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -197,8 +197,8 @@
     },
     {
       "type": "stat",
-      "title": "Différés",
-      "description": "Tentatives en status=deferred : le MX a répondu 4xx ou était injoignable, Postfix réessaiera. Un même message compte une fois par tentative, ce n’est donc pas un nombre de messages uniques.",
+      "title": "En échec temporaire",
+      "description": "Remises qu'un MX refuse poliment (4xx) ou joint pas : « delivery.dsn-temp-fail » et « delivery.connect-error ». Deux noms lus dans la taxonomie du binaire (550 événements), jamais observés sur cette machine faute de destinataire qui gris-liste : au premier pic, vérifier que la ligne sort avant de croire le compteur. Un même message compte une fois par tentative, ce n'est donc pas un nombre de messages uniques.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -210,7 +210,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"postfix\"} |= \"status=deferred\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |~ \"(delivery.dsn-temp-fail|delivery.connect-error)\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -273,8 +273,8 @@
     },
     {
       "type": "stat",
-      "title": "Rejetés",
-      "description": "Tentatives terminées par status=bounced (5xx définitif). C’est le panneau à regarder en premier : un rejet Gmail/Yahoo pour IP non autorisée ou DMARC échoué arrive ici quelques secondes après l’envoi.",
+      "title": "Rejets définitifs",
+      "description": "« delivery.dsn-perm-fail » : le message est perdu et l'expéditeur sera prévenu (sauf si le rebut échoue aussi, voir « Double rebond »). La réponse textuelle du serveur est dans le champ details = de la même ligne.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -286,7 +286,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"postfix\"} |= \"status=bounced\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |= \"delivery.dsn-perm-fail\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -349,8 +349,8 @@
     },
     {
       "type": "stat",
-      "title": "Délai médian",
-      "description": "Médiane du champ delay= des remises (secondes) : file d’attente du relais + connexion + réponse du MX. Une médiane qui monte signale un relais ou un MX lent, pas un problème d’authentification.",
+      "title": "Double rebond",
+      "description": "« delivery.double-bounce » : le destinataire était injoignable ET l'avis de retour a été refusé — le message est perdu sans que personne n'en soit prévenu. Ce panneau remplace la médiane des délais : Postfix écrivait « delay= », l'âge cumulé en secondes, et Stalwart écrit des échéances (nextRetry, expires) et une durée par tentative (elapsed = 181ms). Rien d'équivalent n'est extractible : mesuré le 2026-11-19, « unwrap elapsed(duration) » répond « parse error … unexpected ( » sur ce Loki, et « unwrap elapsed » rend SampleExtractionErr sur « 8584ms ».",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -362,7 +362,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.5, {service=\"postfix\"} |= \"delay=\" | regexp \"delay=(?P<delay>[0-9.]+),\" | unwrap delay [$__range])",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |= \"delivery.double-bounce\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -425,8 +425,8 @@
     },
     {
       "type": "stat",
-      "title": "Délai p95",
-      "description": "95e centile du delay= : la queue longue. Un p95 de plusieurs minutes sur un volume faible veut dire que certains MX ralentissent ou que des messages attendent en file avant d’être remis.",
+      "title": "Avis de retour émis",
+      "description": "« queue.dsn-queued » : les rebonds que le relai a lui-même mis en file. Un volume qui monte plus vite que les rejets veut dire que nos envois partent vers des adresses mortes. Remplace le 95e centile des délais, pour la raison écrite sur le panneau voisin.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -438,7 +438,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.95, {service=\"postfix\"} |= \"delay=\" | regexp \"delay=(?P<delay>[0-9.]+),\" | unwrap delay [$__range])",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |= \"queue.dsn-queued\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -501,8 +501,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Tentatives de remise par statut",
-      "description": "Chaque tentative de remise, répartie sur le statut SMTP écrit par postfix/smtp. Empilé : le vert est ce qui passe, l’orange ce qui sera réessayé, le rouge ce qui est perdu. Un différé qui ne se convertit jamais en sent finit par devenir bounced.",
+      "title": "Tentatives de remise par événement",
+      "description": "Répartition des lignes « delivery.* » sur le nom de l'événement : delivered, failed, dsn-success, dsn-perm-fail, dsn-temp-fail, connect-error… Empilé : le vert de la remise est au-dessous, les échecs au-dessus. Un événement qui ne monte jamais n'est pas un silence sain — c'est peut-être un nom que Stalwart n'écrit pas ici.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -515,7 +515,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (status) (count_over_time({service=\"postfix\"} | regexp \"status=(?P<status>sent|deferred|bounced)\" [$__auto]))",
+          "expr": "sum by (evenement) (count_over_time({service=\"stalwart\"} | regexp \"(?P<evenement>delivery.[a-z-]+)\" [$__auto]))",
           "queryType": "range",
           "refId": "A",
           "legendFormat": "{{status}}",
@@ -647,8 +647,8 @@
     },
     {
       "type": "bargauge",
-      "title": "Codes SMTP des rejets",
-      "description": "Champ dsn= des remises non réussies : 5.x.y = définitif (le message est perdu), 4.x.y = temporaire. Le code à trois chiffres dit qui a refusé (5.7.1 = politique, 5.1.1 = boîte inconnue, 4.7.0 = réputation/IP).",
+      "title": "Codes SMTP vus par le relai",
+      "description": "Le champ « code = » des lignes de remise et de rejet, par valeur : 250 (accepté), 4xx (temporaire), 5xx (définitif). Postfix écrivait un dsn= à trois chiffres sur chaque ligne ; Stalwart met le code dans « code = » et le dsn étendu dans le texte de « details = » (« Enhanced code: 5.7.1 ») — la classe politique/auth se lit donc dans le journal, pas dans ce panneau.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -660,7 +660,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (dsn) (count_over_time({service=\"postfix\"} |= \"dsn=\" | regexp \"dsn=(?P<dsn>[0-9.]+)\" [$__range]))",
+          "expr": "sum by (code) (count_over_time({service=\"stalwart\"} | regexp \"code = (?P<code>[0-9]{3})\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -718,8 +718,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Délai de remise (p50 et p95)",
-      "description": "delay= de chaque remise, en secondes. p50 = le cas courant, p95 = la queue. La différence entre les deux vient surtout des MX qui répondent lentement (greylisting, 4xx immédiat) et des messages qui ont attendu un nouvel essai.",
+      "title": "File du relai : où vont les messages",
+      "description": "Deux lectures de la famille « queue. ». À gauche, la file qui reçoit (« queueName = remote » pour ce qui sort vers Internet, et la file des avis de retour) ; à droite, le nom de l'événement (message-queued, dsn-queued, report-queued, rescheduled…). Les durées de remise ne sont pas ici : voir le panneau « Double rebond ».",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -732,7 +732,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.5, {service=\"postfix\"} |= \"delay=\" | regexp \"delay=(?P<delay>[0-9.]+),\" | unwrap delay [$__auto])",
+          "expr": "sum by (file) (count_over_time({service=\"stalwart\"} |= \"queueName = \" | regexp \"queueName = \\\"(?P<file>[a-z]+)\\\"\" [$__auto]))",
           "queryType": "range",
           "refId": "A",
           "legendFormat": "p50",
@@ -744,7 +744,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.95, {service=\"postfix\"} |= \"delay=\" | regexp \"delay=(?P<delay>[0-9.]+),\" | unwrap delay [$__auto])",
+          "expr": "sum by (evenement) (count_over_time({service=\"stalwart\"} | regexp \"(?P<evenement>queue.[a-z-]+)\" [$__auto]))",
           "queryType": "range",
           "refId": "B",
           "legendFormat": "p95",
@@ -830,7 +830,7 @@
     {
       "type": "bargauge",
       "title": "Destinataires par domaine",
-      "description": "Domaine extrait de to=<adresse>. Sert à voir où partent réellement les messages : un domaine inattendu (tests, adresse personnelle) ressort ici avant d’être un problème de réputation.",
+      "description": "Domaine extrait du champ « to = ». Sert à voir où partent réellement les messages : un domaine inattendu (tests, adresse personnelle) ressort ici avant d'être un problème de réputation. Attention au piège mesuré : la ligne écrit « from = » AVANT « to = », donc une extraction au premier « @ » rend NOTRE domaine — la règle d'alerte comme ce panneau ancrent sur « to = ».",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -842,7 +842,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (domain) (count_over_time({service=\"postfix\"} |= \"to=<\" | regexp \"to=<[^@>]+@(?P<domain>[^>]+)>\" [$__range]))",
+          "expr": "sum by (domain) (count_over_time({service=\"stalwart\"} |= \"delivery.delivered\" | regexp \"to = \\\"[^\\\"]+@(?P<domain>[^\\\"]+)\\\"\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -900,8 +900,8 @@
     },
     {
       "type": "bargauge",
-      "title": "Relais MX utilisés",
-      "description": "relay= de chaque remise : le MX réellement contacté. Gmail, Outlook et Yahoo apparaissent séparément, ce qui permet de rapporter un refus au bon destinataire plutôt qu’au relais.",
+      "title": "Serveurs MX contactés",
+      "description": "Le champ « hostname = » de la ligne de remise : le serveur réellement joint. Gmail, Outlook et Yahoo apparaissent séparément, ce qui permet de rapporter un refus au bon destinataire plutôt qu'au relais.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -913,7 +913,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (relay) (count_over_time({service=\"postfix\"} |= \"relay=\" | regexp \"relay=(?P<relay>[A-Za-z0-9.-]+)\" [$__range]))",
+          "expr": "sum by (relay) (count_over_time({service=\"stalwart\"} |= \"hostname = \" | regexp \"hostname = \\\"(?P<relay>[A-Za-z0-9.-]+)\\\"\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -984,7 +984,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (sender) (count_over_time({service=\"postfix\"} |= \"from=<\" | regexp \"from=<(?P<sender>[^>]*)>\" | sender != \"\" [$__range]))",
+          "expr": "sum by (sender) (count_over_time({service=\"stalwart\"} |= \"queue.message-queued\" | regexp \"from = \\\"[^\\\"]*@(?P<sender>[^\\\"]+)\\\"\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -1042,8 +1042,8 @@
     },
     {
       "type": "stat",
-      "title": "Erreurs DKIM (php)",
-      "description": "Lignes « Signature DKIM désactivée : clé illisible ». À zéro, les messages partent signés. À un ou plus, ils partent non signés : le DMARC ne tient plus que par SPF.",
+      "title": "Erreurs de signature DKIM (relai)",
+      "description": "« dkim. » et « dkim2. » comptés ensemble : une règle ou un panneau libellé « dkim.* » est aveugle aux 13 événements de la famille « dkim2. » (mesuré dans la taxonomie). À zéro, rien n'a cassé à l'écriture de la signature. CE QUE CE N'EST PAS : « smtp.dkim-fail » est un échec de vérification À L'ENTRÉE — mesuré le 2026-11-19, il sort sur chaque soumission non signée (strict = false, result = []) et ne dit rien de notre signature sortante. Le « Signature DKIM désactivée » de l'application a disparu avec le listener retiré le 2026-11-17.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -1055,7 +1055,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"php\"} |~ \"Signature DKIM désactivée\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |~ \"(dkim|dkim2).(build-error|public-key-error|recipe-error|signature-invalid|custody-broken|timestamp-invalid)\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -1190,8 +1190,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Messages déposés par intervalle",
-      "description": "Volume accepté par le relais (une ligne cleanup par message). C’est le débit entrant : newsletter de 06:40, alertes Dagu, formulaires. Il se compare au panneau des tentatives : un déposé sans tentative visible signale un qmgr arrêté.",
+      "title": "Messages mis en file, par intervalle",
+      "description": "Débit entrant du relai : une ligne « queue.message-queued » par message — newsletter du matin, alertes Dagu, formulaires. Il se compare au panneau des tentatives : un mis en file sans tentative correspondante est un message encore en attente.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -1204,7 +1204,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"postfix\"} |= \"message-id=\" [$__interval]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |= \"queue.message-queued\" [$__interval]))",
           "queryType": "range",
           "refId": "A",
           "legendFormat": "messages déposés",
@@ -1291,7 +1291,7 @@
     {
       "type": "logs",
       "title": "Rejets définitifs",
-      "description": "Lignes status=bounced avec la réponse textuelle du MX : c’est là que se lit le motif exact (IP non autorisée, DMARC, boîte inconnue, message refusé comme spam).",
+      "description": "Lignes « delivery.dsn-perm-fail » avec la réponse textuelle du MX dans details = : c'est là que se lit le motif exact (IP non autorisée, DMARC, boîte inconnue, message refusé comme spam).",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -1303,7 +1303,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"postfix\"} |= \"status=bounced\"",
+          "expr": "{service=\"stalwart\"} |= \"delivery.dsn-perm-fail\"",
           "queryType": "range",
           "refId": "A",
           "maxLines": 100,
@@ -1329,8 +1329,8 @@
     },
     {
       "type": "logs",
-      "title": "Différés",
-      "description": "Lignes status=deferred : le MX a répondu 4xx ou n’a pas répondu. En volume, un motif unique répété (par exemple 4.7.0 de réputation) noie le reste : c’est le signe d’un blocage côté destinataire, pas d’une panne du relais.",
+      "title": "En échec temporaire",
+      "description": "Remises qu'un MX refuse poliment (4xx) ou joint pas : « delivery.dsn-temp-fail » et « delivery.connect-error ». Deux noms lus dans la taxonomie du binaire (550 événements), jamais observés sur cette machine faute de destinataire qui gris-liste : au premier pic, vérifier que la ligne sort avant de croire le compteur. Un même message compte une fois par tentative, ce n'est donc pas un nombre de messages uniques.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -1342,7 +1342,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"postfix\"} |= \"status=deferred\"",
+          "expr": "{service=\"stalwart\"} |~ \"(delivery.dsn-temp-fail|delivery.connect-error|delivery.mx-lookup-failed|delivery.ip-lookup-failed)\"",
           "queryType": "range",
           "refId": "A",
           "maxLines": 100,
@@ -1369,7 +1369,7 @@
     {
       "type": "logs",
       "title": "Erreurs côté application",
-      "description": "Ce que php dit de l’envoi : clé DKIM illisible, exception du Mailer, échec du pont mail(). En production, Monolog n’écrit sur stderr que les erreurs (fingers_crossed) : une ligne ici est toujours à traiter.",
+      "description": "Ce que php dit de l'envoi : exception du Mailer, échec du pont mail(). En production, Monolog n'écrit sur stderr que les erreurs (fingers_crossed) : une ligne ici est toujours un envoi qui n'a pas quitté la machine. La clé DKIM n'est plus lue par php depuis le 2026-11-17 (listener retiré), elle n'a donc plus rien à dire ici.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -1381,7 +1381,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"php\"} |~ \"Signature DKIM désactivée|Échec de l.envoi\"",
+          "expr": "{service=\"php\"} |~ \"Échec de l.envoi|TransportException\"",
           "queryType": "range",
           "refId": "A",
           "maxLines": 100,
@@ -1407,8 +1407,8 @@
     },
     {
       "type": "logs",
-      "title": "Journal complet du relais",
-      "description": "Tout le maillog du conteneur postfix, healthcheck exclu (il écrit une ligne toutes les 30 s). Utile pour suivre un identifiant de file de bout en bout : dépôt, tentative, remise ou rejet.",
+      "title": "Journal complet du relai",
+      "description": "Tout le flux stdout du conteneur stalwart (dépôt Yabiladi-Mailer), moins le bruit de fondation mesuré le 2026-11-19 : les tâches planifiées (task-manager.task-scheduled) et la collecte de métriques (telemetry.metrics-collected), qui écrivent chacune leur ligne toutes les 30 s. Utile pour suivre un queueId de bout en bout : dépôt, tentative, remise ou rejet.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -1420,7 +1420,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"postfix\"} != \"the Postfix mail system is running\"",
+          "expr": "{service=\"stalwart\"} != \"task-manager.task-scheduled\" != \"telemetry.metrics-collected\"",
           "queryType": "range",
           "refId": "A",
           "maxLines": 200,
@@ -1453,7 +1453,7 @@
         "uid": "yabiladi-loki"
       },
       "options": {
-        "content": "**Ce qui est mesuré exactement**\n\n— **Messages déposés** : une ligne `postfix/cleanup … message-id=` par message accepté, rebonds internes compris. C’est le débit entrant réel, pas le nombre d’envois applicatifs.\n— **Remis / Différés / Rejetés** : des *tentatives*, une par destinataire et par essai. Un message différé trois fois compte trois lignes `deferred`.\n\n**Ce que ces panneaux ne peuvent pas dire**\n\n— **Taille de file** : le relais ne la journalise pas. La profondeur (`postqueue -p`) se lit sur le serveur ; ici on voit les tentatives, pas l’attente.\n— **Envois réussis côté application** : en production, Monolog ne remonte que les erreurs (`fingers_crossed`), donc aucun journal `mailer` au niveau debug. La preuve d’un envoi reste la ligne `status=sent` du relais.\n— **Signature DKIM effective** : elle n’est pas journalisée en cas de succès. Seule l’absence de clé produit une ligne, d’où le panneau « Erreurs DKIM » à zéro plutôt qu’un compteur de signatures.\n\n**Réflexes**\n\n— Rejets massifs avec `5.7.1` et « not authorized » : IP sortante ou SPF, pas le code applicatif.\n— `4.7.0` répété : réputation du domaine/IP côté destinataire.\n— Aucun « déposé » à l’heure de la newsletter : le DAG ou le relais, pas Gmail.\n— « Erreurs DKIM » non nul : `docker compose logs php | grep DKIM` et vérifier `var/dkim/yabiladi.private`.",
+        "content": "## Ce qui est mesuré exactement\n\n— **Mis en file** : une ligne `queue.message-queued` par message que le relai accepte, sur n'importe lequel de ses écouteurs (25 public, 465, 587, et le 2525 interne du réseau `yabiladi_app` par lequel php, dagu et les sœurs soumettent).\n— **Remis / rejetés / temporaires** : un événement `delivery.*` par tentative et par destinataire. Une ligne n'est donc pas un message : trois destinataires font trois lignes.\n— **Double rebond** : `delivery.double-bounce`, la seule ligne qui dise « perdu et tu ne sauras pas ».\n\n## Les trois trous laissés par Postfix\n\n1. **Aucun âge de file.** Stalwart écrit des échéances (`nextRetry`, `nextDsn`, `expires`) et une durée par tentative (`elapsed = 181ms`), jamais un temps écoulé cumulé. Les deux panneaux de latence et la règle d'âge de l'ère Postfix sont donc retirés, pas traduits. Tenter de convertir `elapsed` n'a pas marché : mesuré le 2026-11-19, `unwrap elapsed(duration)` est refusé par ce Loki (« parse error … unexpected ( ») et `unwrap elapsed` échoue sur « 8584ms » (`SampleExtractionErr`).\n2. **Aucune profondeur de file.** Ni journal, ni jauge Prometheus (aucun nom contenant `queue`, `out` ou `message` dans le rendu). La seule façon de savoir combien de messages dorment est de lire les lignes `queue.` dans ce dashboard, puis le serveur lui-même.\n3. **Aucun domaine sur les compteurs Prometheus.** Le domaine destinataire n'existe que dans la ligne de journal : tous les panneaux « par domaine » de cette page sont donc des requêtes Loki avec extraction, pas des métriques.\n\n## Les formes de ligne sur lesquelles tout ceci est bâti (sonde locale du 2026-11-19)\n\n```\n… INFO Queued message for delivery (queue.message-queued) … queueId = 341482566435471360, from = \"webmaster@yabiladi.com\", to = [\"sonde@…\"], size = 503, nextRetry = …, expires = …\n… INFO Message delivered (delivery.delivered) … hostname = \"probe.test\", to = \"bob@probe.test\", code = 250, details = \"Ok: queued as …\", elapsed = 3ms\n… INFO DSN permanent failure notification (delivery.dsn-perm-fail) … to = \"…\", hostname = \"aspmx.l.google.com\", details = \"… Enhanced code: 5.7.1, Message: …\"\n```\n\nLes filtres sont écrits en sous-chaîne (`|= \"delivery.dsn-perm-fail\"`) et non en regex à parenthèses échappées : `\"\\\\(…\\\\)\"` est un refus de parsing LogQL, pas une règle fausse — mesuré le 2026-11-19, la requête répond « invalid char escape » et Grafana, avec `execErrState: OK`, s'en tait.",
         "mode": "markdown"
       },
       "targets": [],

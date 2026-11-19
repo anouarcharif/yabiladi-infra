@@ -35,14 +35,15 @@ deploy/secrets/backup-*/*.sops.bin* -text -diff -merge
 # local ni en global) a écrit des retours chariot dans un script monté tel quel
 # dans un conteneur, et le conducteur de la synchro d'interface mourait à sa
 # deuxième ligne sur « set: pipefail: invalid option name » — le CR n'apparaît
-# pas dans le message. Ce dépôt-ci est vierge (9 « .sh » et 4 « .mjs »/« .js »,
-# tous en LF sur le disque) : la règle n'est donc qu'un garde-fou, posé avant la
+# pas dans le message. Ce dépôt-ci est vierge (12 « .sh » et 5 « .mjs »/« .js »
+# au comptage du 2026-11-19, tous en LF sur le disque) : la règle n'est donc
+# qu'un garde-fou, posé avant la
 # première passe de « git checkout » ou de « git rebase --autostash » qui ne le
 # dira pas.
 #
 # Ce que la règle protège : « deploy.sh » et « deploy/secrets.sh », appelés sur
-# l'hôte en bash ; « docker/postfix/entrypoint.sh » et « docker/traefik/generate-*.sh »,
-# exécutés dans un conteneur ; les outils « tools/** » que le DAG de synchro
+# l'hôte en bash ; « docker/traefik/generate-*.sh », exécuté dans un conteneur ;
+# les outils « tools/** » que le DAG de synchro
 # relit depuis son clone de l'infra, en node. Un retour chariot y casse une
 # option, une comparaison de chaîne, ou — pour une valeur — devient un caractère
 # de la valeur.

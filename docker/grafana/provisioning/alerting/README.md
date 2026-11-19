@@ -11,7 +11,7 @@ tant que le conteneur tourne déjà. Trois rôles, six fichiers :
 | `contact_points.yaml` | OÙ le message part (destinataire et canal). |
 | `notification_policies.yaml` | QUAND il part, combien de fois, et à qui va chaque règle. |
 | `alert_rules_radio.yaml` | CE QUI EST surveillé (les requêtes Loki et les seuils). |
-| `alert_rules_email.yaml` | Rebonds du relais Postfix, dossier « Applications ». |
+| `alert_rules_email.yaml` | Envois et rebonds du relai Stalwart (dépôt `Yabiladi-Mailer` depuis le 2026-11-19), dossier « Applications ». |
 | `alert_rules_containers.yaml` | Arrêt d'un conteneur critique, dossier « Infrastructure ». |
 | `alert_rules_crash.yaml` | Crash d'un processus À L'INTÉRIEUR d'un conteneur qui reste Up, dossier « Infrastructure ». |
 
@@ -216,82 +216,58 @@ ressemblent et ne rendent pas la même chose :
   lire le premier fait afficher `1794934364879` au lieu de `599` (mesuré ici le
   2026-11-17 sur la règle d'âge de la file).
 
-Côté courriel, sur le poste de développement comme sur le serveur : `docker
-compose logs --tail=100 postfix` doit montrer la remise (`status=sent`) du
-message parti de `webmaster@yabiladi.com` vers le destinataire du contact point,
-et `docker compose exec postfix postqueue -p` doit répondre vide.
+Côté courriel, sur le poste de développement comme sur le serveur : les alertes
+partent par Resend (`smtp.resend.com:587`, `GF_SMTP_*` de `compose.yaml`) et non
+par le relai de la machine — couper `stalwart` ne coupe donc pas les alertes. Le
+relai, lui, se regarde dans son dépôt : `docker compose logs --tail=100 stalwart`
+dans `/opt/yabiladi-mailer` doit montrer la remise (`delivery.delivered`) du
+message parti de `webmaster@yabiladi.com` vers le destinataire du contact point.
 
 Une notification n'arrive pas dans la seconde : `group_wait` attend
 30 s (critique) ou 1 min (avertissement) après le passage en `Alerting`, et le
 retard propre de la règle s'ajoute — les règles de battement prennent
 15 min sans ligne plus 5 min de `for:` avant d'écrire quoi que ce soit.
 
-# Les deux règles « file différée » et leur fenêtre de 75 min
+# Les règles « file différée » de l'ère Postfix, et ce qui en survient
 
-`email-defere-volume` et `email-defere-age` comptent les lignes
-`status=deferred`, c'est-à-dire les remises QUE Postfix réessaie encore. Elles
-ont été jouées le 2026-11-17 avec 33 messages volontairement bloqués derrière un
-`relayhost` inexistant : la règle de volume est passée `firing` (annotation à
-16:39:30 puis 16:44:30, `for: 5m` honoré). La règle d'âge, elle, ne peut pas
-être provoquée : ce qu'elle compare est du temps écoulé, et le lire à l'avance
-voudrait dire écrire un `delay=` que le message n'a pas vécu. Elle est donc
-jouée en vrai, à l'horloge de la file, valeur relevée chaque minute (599 s à
-16:49, 1199 s à 16:53, 2399 s à 17:11). Le franchissement est tombé à la
-tentative suivante, et il est mesuré : ligne `delay=5066` à 17:55:04, règle
-`email-defere-age` passée `firing` à 17:55:30Z sur cette même valeur, visible
-dans l'API alertmanager sous `severity=critical`, « Emails — un message attend
-sa remise depuis plus d'une heure ». Seule l'arrivée du courriel dans la boîte
-n'est pas observée d'ici (Grafana classe un échec SMTP en « unrecoverable » et
-ne réessaie pas).
+Jouées le 2026-11-17 avec 33 messages volontairement bloqués derrière un
+`relayhost` inexistant, ces deux règles ont laissé trois leçons qui comptent
+toujours, et une quantité qui a disparu avec le conteneur.
 
-Ce que la file doit à ce dosage : `queue_run_delay` et
-`minimal_backoff_time` valent 300 s, `maximal_backoff_time` 4000 s. L'intervalle
-entre deux tentatives d'un même message s'étire donc à peu près par doublements —
-mesuré sur le doyen : `delay=` 599, 1199, 2399 puis 5066, soit des écarts de 600,
-1200 et 2667 s, pas 2400 et 4000 — ce qui explique qu'un message de dix minutes
-soit déjà à `delay=599` mais qu'il faille une heure de temps réel pour que sa
-ligne déclare plus de 3600 s. La fenêtre de la règle d'âge est de 75 min — plus que le plus grand
-écart possible entre deux lignes — pour qu'une file muette ne se déclare pas
-saine entre deux tentatives.
+- La règle de volume (`email-defere-volume`, seuil 30 en 15 min) est passée
+  `firing` de 16:39 à ~17:00, puis **s'est éteinte sur un bourbier intact** : le
+  nombre de messages ne changeait pas, mais le nombre de LIGNES par quart
+  d'heure fondait à mesure que le backoff s'étirait (`delay=` 599, 1199, 2399
+  puis 5066 — écarts de 600, 1200 et 2667 s). Un compteur de lignes est un
+  **détecteur de rafale**, pas un thermomètre.
+- La règle d'âge (`email-defere-age`) ne pouvait pas être simulée : elle compare
+  du temps vécu. Jouée à l'horloge réelle, franchissement mesuré — ligne
+  `delay=5066` à 17:55:04, règle `firing` à 17:55:30Z — et sa fenêtre de 75 min
+  venait de là : plus longue que le plus grand écart entre deux lignes d'un même
+  message, pour qu'une file muette ne se déclare pas saine entre deux tentatives.
+  **Le dosage « la fenêtre dépasse le plus grand intervalle » reste la règle d'or
+  de toute alerte lue dans des journaux.**
+- Vider la file ne l'a pas éteinte : le nettoyage de 17:56:20 (`postsuper -d ALL
+  deferred`) a laissé les lignes `delay=5066` dans la fenêtre jusqu'à ~19:10Z.
+  C'est le comportement voulu — une alerte qui s'efface au premier geste cache
+  l'incident — mais il faut le savoir avant de conclure « le nettoyage n'a rien
+  donné ».
 
-Le champ `delay=` est l'âge CUMULÉ du message depuis son arrivée en secondes ;
-c'est le seul âge lisible dans les journaux. La profondeur brute de file ne
-l'est pas : `docker compose exec postfix postqueue -p`, où « N Requests » donne
-le nombre réel de messages. Et une ligne n'est pas un message : une tentative
-écrit une ligne par destinataire.
+Ce qui n'existe plus côté Stalwart (mesuré le 2026-11-19, et non pas supposé) :
+aucune jauge de file (aucun nom Prometheus contenant `queue`, `out` ou
+`message`), aucune profondeur lisible (`postqueue` n'existe pas), et aucun âge
+cumulé : les lignes de la famille `queue.` portent des **échéances**
+(`nextRetry`, `nextDsn`, `expires`), jamais un temps écoulé. La règle d'âge a
+donc été **retirée** plutôt que réécrite sur du vent, et remplacée par
+`email-double-bounce` (le message est perdu et son avis de retour aussi), tandis
+que `email-temp-fail-volume` garde le rôle de détecteur de rafale sur
+`delivery.dsn-temp-fail` / `delivery.connect-error`. Le troisième signal — la
+profondeur brute — reste hors de portée : il faudrait lire la file du serveur
+lui-même, et rien dans l'édition gratuite ne l'expose.
 
-# La règle de volume se tait pendant que l'encombrement dure
+# Une ligne d'erreur de n'importe qui faisait sonner la règle de crash
 
-Mesuré le 2026-11-17 à 17:13 sur l'engorgement volontaire des 33 messages : la
-file répond encore `-- 8 Kbytes in 33 Requests`, mais
-`sum(count_over_time({service="postfix"} |= "status=deferred" [15m]))` ne rend
-plus que **3** (et 107 sur `[60m]`). La raison est le dosage ci-dessus : le
-nombre de messages ne change pas, le nombre de LIGNES par quart d'heure fond à
-mesure que le backoff s'étire. Le seuil de 30 en quinze minutes est donc un
-**détecteur de rafale** — il a sonné de 16:39 à ~17:00, puis s'est éteint sur
-un bourbier intact.
-
-Ce n'est pas un trou de couverture : c'est précisément le relais que prend
-`email-defere-age`, qui ne regarde pas combien de lignes sortent mais combien le
-doyen a attendu. Les deux ensemble disent « ça arrive » puis « ça dure ». Un
-troisième signal — la profondeur brute — n'existe dans aucun journal : il
-faudrait un exporteur qui interroge `postqueue`, et la règle d'âge couvre déjà
-le cas sans machine de plus.
-
-# Vider la file ne fait pas taire la règle d'âge
-
-`email-defere-age` ne lit pas la file, elle lit les LIGNES des 75 dernières
-minutes. Le bourbier a donc été nettoyé à 17:56:20 (`postsuper -d ALL deferred`,
-« Deleted: 34 messages », puis `postconf -X relayhost` et `postqueue -p` = « Mail
-queue is empty ») sans que la règle s'éteigne : ses lignes à `delay=5066`
-restent dans la fenêtre jusqu'à ~19:10Z. C'est le comportement voulu — une alerte
-qui s'efface dès le premier geste d'exploitation cache l'incident en cours — mais
-il faut le savoir avant de conclure « le nettoyage n'a rien donné ». Le témoin
-de la file, lui, est immédiat : `postqueue -p`.
-
-# Une ligne « fatal: » de n'importe quel client postfix fait sonner la règle de crash
-
-`container-postfix-crash` cherche `(fatal:|panic:|abnormal exit|core dumped)`
+`container-postfix-crash` cherchait `(fatal:|panic:|abnormal exit|core dumped)`
 dans tout le flux `service="postfix"`, sans distinguer qui écrit. Mesuré le
 2026-11-17 à 17:53:10Z : la règle est passée `active` sur une ligne écrite par
 mon propre `postsuper -d <id> <id>` mal formé —
@@ -300,11 +276,14 @@ tandis que le conteneur restait `healthy` et que le démon ne s'était jamais tu
 L'alerte s'éteint seule quand la ligne sort de la fenêtre de 10 min : `endsAt`
 18:01:10Z mesuré pour un `startsAt` de 17:53:10Z, aucune intervention.
 
-À trancher plutôt qu'à corriger à l'aveugle. Laisser le motif tel quel : toute
-fausse manœuvre dans le conteneur est signalée, et c'est un geste rare. Le
-restreindre aux processus du démon (`postfix/master[`, `postfix/qmgr[`,
-`postfix/smtp[`, `opendkim[`) : plus de bruit d'opérateur, mais un vrai crash
-écrit par un sous-processus au nom inattendu devient invisible.
+La leçon a été retenue à l'envers pour Stalwart : la nouvelle règle
+`container-stalwart-crash` ne cherche AUCUN mot. Elle sélectionne
+`detected_level=~"error|critical"`, l'étiquette que Loki dérive du jeton de
+niveau en tête de ligne — parce que mesuré le 2026-11-19, une remise en échec
+normale s'écrit en `INFO` avec « failed » dans son texte, et qu'un motif lexical
+aurait donc sonné sur chaque rebond. Ce qui reste non couvert : un panic écrit
+hors traceur n'aurait pas de niveau ; il tue le processus, et
+`container-stalwart-down` le dit dans les deux minutes.
 
 # Ce répertoire n'est pas le seul endroit où l'alerting vit
 

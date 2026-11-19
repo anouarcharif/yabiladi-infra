@@ -103,51 +103,9 @@ check_path "$(env_val "$R_INFRA" DBACKUP_RESTORE_HOST_PATH)" "1001:33 750" "infr
 check_path "$(env_val "$R_SITE" RADIO_CONTENT_HOST_PATH)" "" "ni l'un ni l'autre : la discothèque vient du V1"
 check_path "$(env_val "$R_SITE" SITE_MEDIA_HOST_PATH)" "33:33 755" "site (monte public/files)"
 check_path "$(env_val "$R_SITE" SITE_EDITOR_IMAGES_HOST_PATH)" "33:33 755" "site (monte public/img)"
-check_path "$(env_val "$R_SITE" OPENDKIM_KEYS_DIR)" "" "site : l'entrypoint php copie les clés"
-# Le relais de l'infrastructure lit le même dossier hôte. Contrairement au
-# conteneur php, lui ne peut pas s'en passer en silence : sans clé montée,
-# « entrypoint.sh » démarre le relais non signé, et le DMARC de yabiladi.com est
-# en « p=quarantine pct=100 » — un courrier non signé part donc en spam, et le
-# seul indice en est le conteneur qui reste healthy avec état « off ».
-keyfile="$(env_val "$R_INFRA" OPENDKIM_KEYS_DIR)"
-# Domaine et sélecteur : absents du .env versionné quand la machine se contente
-# du défaut écrit dans compose.yaml et l'image.
-dkim_domain="$(env_val "$R_INFRA" OPENDKIM_DOMAIN)"; dkim_domain="${dkim_domain:-yabiladi.com}"
-dkim_selector="$(env_val "$R_INFRA" OPENDKIM_SELECTOR)"; dkim_selector="${dkim_selector:-mail}"
-keyfile="$keyfile/$dkim_domain/$dkim_selector.private"
-if [ -f "$keyfile" ]; then
-    ok "$keyfile" "clé DKIM du relais présente ($(stat -c '%u:%g %a' "$keyfile" 2>/dev/null || echo 'non lisible'))"
-else
-    note "$keyfile" "ABSENT — le relais partira non signé, et le DMARC « p=quarantine » met ce courrier en spam"
-fi
-# L'adresse sur laquelle le relais publie son 25. Le défaut de compose.yaml est
-# la boucle locale — voulu, pour qu'une machine mal remplie n'expose pas un
-# port 25 ouvert. Ce que la valeur de la cible sert : la soumission depuis
-# l'hôte d'imouzzer lui-même. Les conteneurs du réseau n'ont pas besoin de
-# cette publication — ils joignent « postfix:25 » par le réseau interne. Et
-# depuis le 2026-11-17, « tarourt » non plus : cette machine a son propre
-# relais, le dépôt « yabiladi-postfix-primary », qui signe son propre courrier.
-pub="$(env_val "$R_INFRA" POSTFIX_PUBLISH_ADDRESS)"
-case "$pub" in
-    ""|127.0.0.1|localhost) note "POSTFIX_PUBLISH_ADDRESS" "« ${pub:-non déclaré} » : le 25 ne s'entend que sur cette machine — rien d'extérieur ne peut y soumettre (les conteneurs, eux, passent en interne)" ;;
-    0.0.0.0) note "POSTFIX_PUBLISH_ADDRESS" "0.0.0.0 : le 25 s'entend sur toutes les interfaces de la machine, pas seulement l'IP visée" ;;
-    *)  # Écrire la valeur ne suffit pas : il faut que la machine la PORTE. Une
-        # IP qui n'est celle d'aucune interface fait échouer « up -d » sur
-        # « cannot assign requested address » — le relais n'a alors aucun port
-        # 25, et l'hôte d'imouzzer n'a plus d'expéditeur du tout.
-        # « ip » n'existe pas sur un poste Windows : la ligne rend alors ce qui
-        # est lu, pas une promesse.
-        if command -v ip >/dev/null 2>&1; then
-            if ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qx "$pub"; then
-                ok "POSTFIX_PUBLISH_ADDRESS" "$pub, adresse portée par une interface de cette machine"
-            else
-                bad "POSTFIX_PUBLISH_ADDRESS" "$pub n'est l'adresse d'aucune interface d'ici — le « up -d » du postfix refusera de publier le 25"
-            fi
-        else
-            note "POSTFIX_PUBLISH_ADDRESS" "$pub — à confronter aux interfaces de la cible (« ip -4 addr show »), commande absente sur ce poste"
-        fi ;;
-esac
-note "POSTFIX_RELAY_NETWORKS" "$(env_val "$R_INFRA" POSTFIX_RELAY_NETWORKS | sed 's/^$/non déclaré — seuls les réseaux des interfaces du conteneur soumettent/')"
+# Le relais SMTP et son dossier de clés DKIM ne sont plus contrôlés ici : ils ont
+# quitté ce dépôt le 2026-11-19 pour « yabiladi-mailer », dont le
+# « ./deploy.sh --check » relève la clé, son sélecteur et l'adresse publiée.
 check_path "$(env_val "$R_SITE" PRAYER_PDF_HOST_DIR)" "" "site : sous son propre clone par défaut"
 # L'index du moteur de recherche du forum : valeur par défaut relative au clone
 # du site, donc le « ./ » se résout ici — statuer sur le chemin tel quel
@@ -156,11 +114,10 @@ check_path "$(env_val "$R_SITE" PRAYER_PDF_HOST_DIR)" "" "site : sous son propre
 # conteneur du moteur, que compose.yaml démarre en 999:999.
 check_path "$(env_val "$R_SITE" MANTICORE_DATA_HOST_PATH | sed "s|^\./|$R_SITE/|")" "999:999 750" "site prepare_manticore_data"
 
-# Les quatre clés lues par deux projets : « le même » veut dire la même valeur
-# absolue, sinon un projet écrit dans un arbre et l'autre archive le voisin vide,
-# ou l'un signe avec une clé que le DNS ne publie pas.
+# Les trois clés lues par deux projets : « le même » veut dire la même valeur
+# absolue, sinon un projet écrit dans un arbre et l'autre archive le voisin vide.
 hdr "3. Les valeurs partagées entre deux projets (divergence = archive vide annoncée « réussi »)"
-for cle in SITE_MEDIA_HOST_PATH SITE_EDITOR_IMAGES_HOST_PATH RADIO_CONTENT_HOST_PATH OPENDKIM_KEYS_DIR; do
+for cle in SITE_MEDIA_HOST_PATH SITE_EDITOR_IMAGES_HOST_PATH RADIO_CONTENT_HOST_PATH; do
     a="$(env_val "$R_INFRA" "$cle")"; b="$(env_val "$R_SITE" "$cle")"
     [ -z "$a" ] && [ -z "$b" ] && continue
     if [ "$a" = "$b" ]; then ok "$cle" "$a"; else bad "$cle" "infra=« $a » site=« $b » — deux arbres différents, l'un sera archivé vide"; fi
@@ -276,15 +233,16 @@ else
 fi
 cat <<'PORT25'
   Le 25 mérite son attention : une distribution installe son Postfix dessus sans
-  qu'on le lui demande, et le « up -d » de l'infrastructure meurt alors sur
-  « port is already allocated ». Sur la machine du conteneur, le démon local ne
-  doit donc pas écouter : un courrier qui partirait par lui sortirait sans la
-  clé montée dans le conteneur, donc non signé, donc en spam sous le
-  « p=quarantine » du domaine. Même exigence sur l'autre signeuse, « tarourt »,
-  depuis le 2026-11-17 : son relais est un dépôt à lui (« yabiladi-postfix-
-  primary »), et c'est sa recette « host/install-sendmail-shim.sh » qui prouve
-  la bannière du conteneur AVANT de désarmer le démon Debian (procédure au §6.1
-  de Yabiladi-V2-Symfony/to-do-going-live.md).
+  qu'on le lui demande. Ce n'est plus le « up -d » de l'infrastructure qui en
+  meurt — le relais est parti le 2026-11-19 dans le projet « yabiladi-mailer »,
+  qui publie 25/465/587 (et la soumission locale 127.0.0.1:2526) et dont le
+  « ./deploy.sh --check » est le contrôle à jouer pour ces ports-là. Ce qui ne
+  change pas : sur la machine du conteneur, le démon local ne doit pas écouter,
+  faute de quoi un courrier partirait par lui, sans la clé du conteneur, donc non
+  signé, donc en spam sous le « p=quarantine » du domaine. « tarourt » a la même
+  exigence depuis le 2026-11-17, avec son relais à lui (« yabiladi-postfix-
+  primary ») et sa recette « host/install-sendmail-shim.sh », qui prouve la
+  bannière du conteneur AVANT de désarmer le démon Debian.
 PORT25
 
 # ------------------------------------------------------------------ 7. bilan

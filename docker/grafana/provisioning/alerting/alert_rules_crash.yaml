@@ -82,6 +82,14 @@ apiVersion: 1
 # « yabiladi-radio-alertes » (anouar@yabiladi.com, Resend via GF_SMTP_*). Le nom
 # du conteneur est dans le titre et dans le label « container », jamais
 # seulement dans l'expression.
+#
+# FANTÔMES. Le provisioning est un upsert, pas une synthèse (README) :
+# « container-postfix-crash » survivrait à sa réécriture sous l'UID
+# « container-stalwart-crash » et chercherait à jamais « fatal: » dans un flux
+# qui n'existe plus — une règle muette, donc faussement rassurante.
+deleteRules:
+  - orgId: 1
+    uid: container-postfix-crash
 groups:
   - orgId: 1
     name: crash-des-processus
@@ -651,8 +659,8 @@ groups:
             Voir la ligne exacte : docker compose logs --since 15m navidrome | grep -Ei
             'panic:|fatal:'
 
-      - uid: container-postfix-crash
-        title: Postfix — processus fatal alors que le conteneur tourne
+      - uid: container-stalwart-crash
+        title: Stalwart — erreur fatale ou panic alors que le conteneur tourne
         condition: C
         data:
           - refId: A
@@ -660,7 +668,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum(count_over_time({job="docker", service="postfix"} |~ "(?i)(fatal:|panic:|abnormal exit|core dumped)" [10m]))'
+              expr: 'sum(count_over_time({job="docker", service="stalwart", detected_level=~"error|critical"} [10m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -692,20 +700,24 @@ groups:
         labels:
           severity: critical
           team: infrastructure
-          container: postfix
+          container: stalwart
           signal: crash
         annotations:
-          summary: 'Conteneur postfix : un démon Postfix a écrit une erreur fatale'
+          summary: 'Conteneur stalwart : une ligne de niveau erreur est apparue'
           description: >-
-            Une ligne « fatal: », « panic: », une mort anormale ou un core dump sont
-            apparus sur le flux stdout de postfix dans les 10 dernières minutes.
-            Postfix se relance lui-même pour ses démons filleuls : un master mort
-            peut laisser la file s'empiler sans que le conteneur ne tombe. Les
-            rejets côté destinataire sont couverts ailleurs (règles
-            « email-rebond-* ») ; ici c'est bien le serveur qui est en cause.
-            Voir la ligne exacte : docker compose logs --since 15m postfix | grep -Ei
-            'fatal:|panic:'
-            Contrôle de la file : docker compose exec -T postfix postqueue -p
+            Le sélecteur porte sur « detected_level », l'étiquette que Loki dérive
+            du jeton de niveau en tête de ligne (mesuré le 2026-11-19 : les
+            flux du relai arrivent étiquetés « info », avec la même étiquette
+            sur tous les conteneurs). Le motif ancre donc sur le NIVEAU et non
+            sur le mot : la même après-midi, une remise en échec s'écrivait en
+            INFO avec « failed » dans son texte — un « (?i)error » aurait sonné
+            sur chaque rebond normal.
+            Ce que la règle ne voit pas : un panic Rust écrit hors du traceur
+            n'aurait pas de niveau détecté. Stalwart est un seul processus, ce
+            panic-là le tue, et « container-stalwart-down » le dit dans les deux
+            minutes.
+            Voir la ligne exacte : docker compose logs --since 15m stalwart
+            (dépôt /opt/yabiladi-mailer, pas ici).
 
       - uid: container-dbackup-crash
         title: DBackup — processus de l'agent de sauvegarde en crash
