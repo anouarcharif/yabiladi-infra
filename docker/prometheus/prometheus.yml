@@ -113,6 +113,15 @@ scrape_configs:
   # se voyait que du côté des alertes. Le nom court des antennes ne change pas,
   # lui, parce que Loki lit l'étiquette Compose « com.docker.compose.service »
   # et non le nom du conteneur (docker/alloy/config.alloy).
+  #
+  # Sixième projet, « yabiladi-mailer » (ajouté à l'alternance le 2026-11-19). La classe de
+  # défaut est différente et vaut d'être consignée : ce dépôt posait un « container_name » figé
+  # (« yabiladi-mailer », sans suffixe numérique), que ce regex ne matche pas — la série
+  # « container_memory_working_set_bytes{name="yabiladi-mailer"} » remontait SANS étiquette
+  # « service » (vérifié sur /api/v1/query), donc le conteneur manquait à la fois aux panneaux
+  # groupés par service et aux règles « conteneur arrêté », pendant que Loki le rendait déjà
+  # sous service="stalwart" (le label Compose est lu par l'antenne). Le correctif est côté
+  # mailer : le nom est laissé à Compose, comme dans les cinq autres projets.
   - job_name: docker
     static_configs:
       - targets: ["cadvisor:8080"]
@@ -125,6 +134,6 @@ scrape_configs:
       # et reste sans étiquette « service » : les panneaux groupés par service
       # ignorent ce que la stack ne déclare pas, au lieu d'inventer un groupe.
       - source_labels: [name]
-        regex: "^(?:yabiladi-(?:infra|symfony|facturation|mediakit|radio)-|yabiladi-)?(.+)-[0-9]+$"
+        regex: "^(?:yabiladi-(?:infra|symfony|facturation|mediakit|radio|mailer)-|yabiladi-)?(.+)-[0-9]+$"
         target_label: service
         replacement: "$1"
