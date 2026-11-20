@@ -42,6 +42,17 @@ apiVersion: 1
 # le « Observed … at » du mail est l'heure du conteneur Grafana (TZ héritée de
 # LOGGING_TZ, voir compose.yaml), alors que l'interface affiche celle du
 # navigateur. Ne pas corriger une heure de grille dans un mail d'alerte.
+#
+# FANTÔME. « sonde-accents-provisioning » est la sonde jouée le 2026-10-30 pour
+# vérifier ce que fait le provisioning d'une UID disparue des fichiers ; son
+# titre porte « à supprimer » et elle est encore listée par
+# /api/v1/provisioning/alert-rules (relevé le 2026-11-19, provenance « file » —
+# l'API la refuse en suppression directe). La nommer ici est le seul geste qui
+# la retire (README, § « Retirer un fichier ne retire pas ses règles »).
+deleteRules:
+  - orgId: 1
+    uid: sonde-accents-provisioning
+
 groups:
   - orgId: 1
     name: sante-des-antennes

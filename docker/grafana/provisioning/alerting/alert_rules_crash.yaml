@@ -668,7 +668,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum(count_over_time({job="docker", service="stalwart", detected_level=~"error|critical"} [10m]))'
+              expr: 'sum(count_over_time({job="docker", service="stalwart"} | detected_level=~"error|critical|fatal" [10m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -705,17 +705,34 @@ groups:
         annotations:
           summary: 'Conteneur stalwart : une ligne de niveau erreur est apparue'
           description: >-
-            Le sélecteur porte sur « detected_level », l'étiquette que Loki dérive
-            du jeton de niveau en tête de ligne (mesuré le 2026-11-19 : les
-            flux du relai arrivent étiquetés « info », avec la même étiquette
-            sur tous les conteneurs). Le motif ancre donc sur le NIVEAU et non
-            sur le mot : la même après-midi, une remise en échec s'écrivait en
-            INFO avec « failed » dans son texte — un « (?i)error » aurait sonné
-            sur chaque rebond normal.
-            Ce que la règle ne voit pas : un panic Rust écrit hors du traceur
-            n'aurait pas de niveau détecté. Stalwart est un seul processus, ce
-            panic-là le tue, et « container-stalwart-down » le dit dans les deux
-            minutes.
+            Le filtre de niveau est un PIPE (« | detected_level=~… »), jamais un
+            sélecteur. Mesuré le 2026-11-19 sur l'instance : écrit dans les
+            accolades, il rend 0 série alors que le même poste contient 3 811
+            lignes du relai — la règle est morte et, avec « noDataState: OK »,
+            elle sonne pour toujours « sain ». En pipe, les 3 811 lignes
+            reviennent (154 pour « warn »). La cause est dans
+            docker/alloy/config.alloy : son stage.label_keep ne retient que
+            app, service, container, job et host. « detected_level » n'est donc
+            jamais indexé — c'est Loki qui le dérive à la requête, et on ne
+            filtre dessus que ligne par ligne.
+            Le motif ancre sur le NIVEAU et non sur le mot : les 21 lignes du
+            relai qui contiennent « error » au corps (détail d'un rebond)
+            dérivent toutes « info ». Un « (?i)error » aurait sonné sur chaque
+            rebond normal. Les trois niveaux de l'alternance sont ceux que cette
+            instance sait rendre (inventaire relevé : error, critical, fatal,
+            warn, info, debug, trace, unknown).
+            Ce que la règle ne voit pas : une ligne sans jeton de niveau porte
+            « unknown » (24 sur ce poste) et un panic Rust écrit hors du
+            traceur n'en porte pas. Stalwart est un seul processus, ce panic-là
+            le tue, et « container-stalwart-down » le dit dans les deux minutes.
+            Pour distinguer « rien à signaler » de « règle morte », relancer la
+            même expression sur un niveau qui a des lignes :
+            sum(count_over_time({job="docker", service="stalwart"} |
+            detected_level=~"warn" [10m])) — doit rendre un nombre, pas du vide.
+            Jouée telle quelle le 2026-11-19, l'expression de cette règle rend 0
+            série sur le relai (le poste n'a rien écrit de ce niveau en trois
+            jours) mais 598 lignes sur service="php" et 2 342 sur
+            service="nginx" : le filtre est vivant, le relai est calme.
             Voir la ligne exacte : docker compose logs --since 15m stalwart
             (dépôt /opt/yabiladi-mailer, pas ici).
 

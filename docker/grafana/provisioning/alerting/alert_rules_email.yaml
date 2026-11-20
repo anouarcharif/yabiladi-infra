@@ -39,6 +39,21 @@ apiVersion: 1
 # 2026-11-19 sur la sonde décrite plus haut : la règle de politique rend 1,
 # celle de volume 1, le double rebond 1, et le groupage par domaine rend
 # exactement « domaine-inexistant-20261119.invalid » et « yabiladi.com ».
+# Rejouées le 2026-11-19 sur l'instance réelle : les six compilent, quatre
+# rendent des lignes (1, 2, 4 et le groupage), les deux dernières rendent 0
+# parce que ni « dsn-temp-fail » ni « connect-error » ne sont écrits sur ce
+# poste en trois jours — un 0 qui n'a pas la même cause qu'une règle morte est
+# vérifié par le contrôle du README (§ « une règle morte ne dit rien »).
+#
+# POURQUOI « | domain=~".+" » APRÈS L'EXTRACTION. « | regexp » n'est PAS un
+# filtre : mesuré, {service="stalwart"} | regexp "(?P<evenement>delivery.[a-z-]+)"
+# rend 3 110 lignes sur ce poste alors que 62 seulement portent un événement
+# « delivery. ». Le stage ajoute une étiquette aux lignes qui matchent et
+# LAISSE PASSER les autres, qui se retrouvent dans un groupe sans étiquette.
+# Sans garde, un « sum by (domain) » peut donc franchir le seuil dans une
+# série « domain="" » et annoncer « Le domaine  rejette nos messages ». Le
+# pipe après l'extraction écarte ce groupe (il est sans effet sur le jeu réel :
+# les 21 lignes « dsn-perm-fail » portent toutes un « to = "…" »).
 #
 # CE QUE CES RÈGLES NE PEUVENT PAS VOIR, et qui a coûté une règle. Deux trous sont
 # structurels, pas des oublis :
@@ -225,7 +240,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum by (domain) (count_over_time({service="stalwart"} |= "delivery.dsn-perm-fail" | regexp "to = \"[^\"]*@(?P<domain>[^\"@]+)\"" [15m]))'
+              expr: 'sum by (domain) (count_over_time({service="stalwart"} |= "delivery.dsn-perm-fail" | regexp "to = \"[^\"]*@(?P<domain>[^\"@]+)\"" | domain=~".+" [15m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -349,7 +364,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum(count_over_time({service="stalwart"} |~ "(delivery.dsn-temp-fail|delivery.connect-error)" [15m]))'
+              expr: 'sum(count_over_time({service="stalwart"} |~ "delivery[.](dsn-temp-fail|connect-error)" [15m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -411,7 +426,7 @@ groups:
             datasourceUid: yabiladi-loki
             model:
               datasource: { type: loki, uid: yabiladi-loki }
-              expr: 'sum(count_over_time({service="stalwart"} |~ "(dkim|dkim2).(build-error|public-key-error|recipe-error|signature-invalid|custody-broken|timestamp-invalid)" [15m]))'
+              expr: 'sum(count_over_time({service="stalwart"} |~ "dkim2?[.](build-error|signer-not-found|signing-failed|public-key-error|recipe-error|signature-invalid|custody-broken|timestamp-invalid)" [15m]))'
               queryType: instant
               refId: A
           - refId: B
@@ -451,13 +466,29 @@ groups:
             destinataire ne dise pourquoi. Les noms sélectionnés sont ceux de la
             FAMILLE qui écrit la signature (dkim. et dkim2. — compter les deux,
             une règle « dkim.* » est aveugle aux 13 événements de « dkim2. »,
-            mesuré dans la taxonomie du binaire).
+            mesuré dans la taxonomie du binaire). L'alternance est écrite en
+            « dkim2?[.] » et non « (dkim|dkim2). » : le point non échappé est un
+            joker, et la leçon du panneau « Tentatives de remise » est fraîche —
+            un « delivery. » sans crochet de protection a fait apparaître
+            « queueId » comme un nom d'événement (62 lignes mesurées).
+            « signer-not-found » et « signing-failed » sont entrés le 2026-11-20
+            après relevé du binaire : les deux noms existent («
+            dkim.signer-not-found », « dkim2.signing-failed ») et décrivent
+            l'écriture par le relai — un objet Dkim disparu du plan fait
+            exactement « signer-not-found », et l'alternance d'avant ne le
+            voyait pas. Les autres membres des deux familles (pass, none,
+            neutral, fail, hash-mismatch, verification-failed, temp-error,
+            perm-error, chain-invalid, envelope-mismatch) sont des verdicts de
+            VÉRIFICATION : ils n'ont rien à faire dans une règle qui annonce
+            qu'on n'a pas su signer.
             CE QUE CETTE RÈGLE NE DIT PAS : « smtp.dkim-fail » est un échec de
             VÉRIFICATION À L'ENTRÉE, pas un défaut de signature sortante —
             mesuré le 2026-11-19, il sort sur chaque soumission non signée
             (« strict = false, result = [] »), donc l'y brancherait ferait sonner
-            le relai en permanence. Et un message qui part SANS signature sans
-            que rien ne l'appelle n'a pas d'événement : la preuve se fait sur le
-            message reçu (« DKIM-Signature: d=yabiladi.com; s=mail2 »), ou par
-            ./deploy.sh --check côté Yabiladi-Mailer, qui compare l'empreinte de
-            la clé du magasin au TXT publié.
+            le relai en permanence. Contrôle rejoué le 2026-11-20 sur 7 jours de
+            ce poste : 10 lignes « smtp.dkim?-fail », 0 ligne « dkim.* ». Et un
+            message qui part SANS signature sans que rien ne l'appelle n'a pas
+            d'événement : la preuve se fait sur le message reçu
+            (« DKIM-Signature: d=yabiladi.com; s=mail2 »), ou par ./deploy.sh
+            --check côté Yabiladi-Mailer, qui compare l'empreinte de la clé du
+            magasin au TXT publié.

@@ -172,6 +172,19 @@ grafana/grafana:13.3.0 : les UID `container-down` et `container-mass-down`,
 absents des fichiers depuis le découpage par conteneur, ont disparu après le
 redémarrage de Grafana, sans intervention sur la base SQLite.
 
+Rejoué le 2026-11-19 sur le même 13.3.0, cette fois sans redémarrer le
+conteneur : `POST /api/admin/provisioning/alerting/reload` (200,
+`Alerting config reloaded`) fait partir les cinq UID nommées dans les quatre
+`deleteRules:` — `container-postfix-down`, `container-postfix-crash`,
+`email-defere-age`, `email-defere-volume` et la sonde `sonde-accents-provisioning`
+— et atterrir les cinq qui les remplacent (`container-stalwart-down`,
+`container-stalwart-crash`, `email-double-bounce`, `email-temp-fail-volume`,
+`email-dkim-signature`) : 39 règles avant, 39 après. `/api/v1/provisioning/alert-rules`
+ne rend plus aucun UID contenant « postfix » ni « defere », et
+`/api/prometheus/grafana/api/v1/rules` déclare les 39 en `health: ok`,
+`state: inactive`. Le rechargement se joue donc à chaud ; un redéploiement
+normal le fait aussi (le provisioning se relit au démarrage).
+
 # Contrôles
 
 ```
@@ -277,13 +290,89 @@ L'alerte s'éteint seule quand la ligne sort de la fenêtre de 10 min : `endsAt`
 18:01:10Z mesuré pour un `startsAt` de 17:53:10Z, aucune intervention.
 
 La leçon a été retenue à l'envers pour Stalwart : la nouvelle règle
-`container-stalwart-crash` ne cherche AUCUN mot. Elle sélectionne
-`detected_level=~"error|critical"`, l'étiquette que Loki dérive du jeton de
-niveau en tête de ligne — parce que mesuré le 2026-11-19, une remise en échec
-normale s'écrit en `INFO` avec « failed » dans son texte, et qu'un motif lexical
-aurait donc sonné sur chaque rebond. Ce qui reste non couvert : un panic écrit
-hors traceur n'aurait pas de niveau ; il tue le processus, et
-`container-stalwart-down` le dit dans les deux minutes.
+`container-stalwart-crash` ne cherche AUCUN mot. Elle filtre sur
+`detected_level=~"error|critical|fatal"`, le niveau que Loki dérive du jeton en
+tête de ligne — parce que mesuré le 2026-11-19, une remise en échec normale
+s'écrit en `INFO` avec « failed » dans son texte, et qu'un motif lexical aurait
+donc sonné sur chaque rebond (les 21 lignes du relai contenant « error »
+derivent toutes `info`). Ce qui reste non couvert : un panic écrit hors traceur
+n'aurait pas de niveau ; il tue le processus, et `container-stalwart-down` le
+dit dans les deux minutes.
+
+## Une règle morte ne dit rien
+
+La première version de cette même règle écrivait son filtre **dans le
+sélecteur** : `{job="docker", service="stalwart", detected_level=~"error|critical"}`.
+Jouée contre Loki le 2026-11-19, elle rend **0 série sur un poste qui contient
+3 811 lignes du relai**. La cause n'est pas Stalwart : `docker/alloy/config.alloy`
+termine sa chaîne par un `stage.label_keep` qui ne retient que `app`, `service`,
+`container`, `job` et `host`. Un niveau détecté n'est donc jamais indexé — il
+n'existe que ligne par ligne, et seule l'écriture en pipe fonctionne :
+
+```
+{job="docker", service="stalwart"} | detected_level=~"error|critical|fatal"
+```
+
+| écriture | rendu mesuré sur ce poste (3 j) |
+| --- | --- |
+| niveau dans les accolades du sélecteur | 0 série |
+| `… } \| detected_level="info"` | 3 811 lignes |
+| `… } \| detected_level=~"warn"` | 154 lignes |
+| `… } \| detected_level=~"error\|critical\|fatal"` (la règle) | 0 — le relai n'a rien écrit de ce niveau |
+| la même écriture sur `service="php"` / `service="nginx"` | 598 / 2 342 lignes |
+
+La dernière ligne est la seule qui prouve la règle : « 0 série » veut dire ici
+« rien à signaler », pas « le filtre est sourd », et c'est le même chiffre. Un
+`noDataState: OK` ne fait pas la différence — il l'efface. Le contrôle est donc
+à jouer **à chaque retouche d'une règle sur niveau** : relancer l'expression en
+remplaçant l'alternance par un niveau qui a des lignes (`warn`, ou un autre
+conteneur) et exiger un nombre.
+
+Le même piège guette l'extraction : `| regexp "(?P<x>…)"` n'est **pas** un
+filtre. Mesuré, `{service="stalwart"} | regexp "(?P<evenement>delivery.[a-z-]+)"`
+rend 3 110 lignes alors que 62 seulement portent un événement `delivery.` ; le
+reste tombe dans un groupe sans étiquette, qui pollue un `sum by` et peut
+franchir un seuil tout seul. D'où le garde `| domain=~".+"` sur
+`email-rebond-domaine` et le même garde dans les panneaux qui extraient.
+
+## Le point d'un `regexp` est un joker
+
+Toujours dans l'extraction, mais par un autre bout : en RE2, `.` ne vaut pas
+« le point ». Écrit `queue.[a-z-]+`, le motif attrape aussi ce qui n'est pas un
+événement — mesuré sur 3 jours de ce poste, le panneau « File du relai » rendait
+`queueId` avec **62 lignes** (c'est le nom du champ `queueId = 341500334071355904`
+présent sur presque toutes les lignes) et `queue started` (de la prose, pas un
+nom). Écrit `queue[.][a-z-]+`, il rend trois vrais noms : `queue.dsn-queued` 10,
+`queue.message-queued` 10, `queue.started` 15. Le crochet de protection
+s'écrit `[.]` et non `\.` : LogQL refuse `\(`, et un seul caractère à changer
+vaut mieux qu'une échappatoire à retenir.
+
+Ce n'est pas qu'une histoire de tableaux de bord. Les filtres `|~` des règles
+portent les mêmes points, et le `dkim.` de la règle de signature est passé de
+`(dkim|dkim2).` à `dkim2?[.]` le 2026-11-20 — la forme courte en profite pour
+nommer `signer-not-found`, que l'ancienne alternance oubliait : un objet `Dkim`
+disparu du plan rend exactement cet événement, et la règle serait restée muette
+devant le défaut qu'elle est là pour annoncer.
+
+## Un état d'alerte lu dans l'API n'est pas une mesure
+
+Contrôlé le 2026-11-20 au matin sur le poste de dev : `/api/prometheus/grafana/api/v1/rules`
+annonçait 39 règles en bonne santé dont **15 en `firing`** — onze « conteneur
+arrêté », dont `container-stalwart-down` sur un relai `Up (healthy)`. La valeur
+courante de l'expression, jouée en direct sur Prometheus, rend `1` (le conteneur
+est vu depuis 13 s), et `count by (service) (container_last_seen{job="docker"} > (time()-60))`
+rend les 30 services, y compris les projets qui ne tournent pas ici. Les règles
+ne sont pas en cause : le planificateur ngalert avait **4 h de retard**
+(`lastEvaluation` à 02:07Z pour 08:51Z d'horloge) et recrachait son arrière
+(`level=warn msg="Tick dropped because alert rule evaluation is too slow"`),
+Windows ayant endormi Docker Desktop pendant la nuit. Le retard se résorbe tout
+seul (02:07 → 04:49 en 40 s), mais pendant ce temps l'`state` raconte le passé.
+
+Conséquence pour la vérification d'un lot d'alertes : `state` ne prouve rien sur
+ce poste, `health` oui (une requête invalide passe la santé en `error`). Pour
+prouver une règle, jouer son expression à la source (`/api/datasources/proxy/uid/…`
+ côté Grafana, ou Prometheus/Loki directement) et vérifier le seuil à la main ;
+pour prouver un lot provisionné, compter les UID et la santé, comme ci-dessus.
 
 # Ce répertoire n'est pas le seul endroit où l'alerting vit
 

@@ -210,7 +210,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"stalwart\"} |~ \"(delivery.dsn-temp-fail|delivery.connect-error)\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |~ \"delivery[.](dsn-temp-fail|connect-error)\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -515,10 +515,10 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (evenement) (count_over_time({service=\"stalwart\"} | regexp \"(?P<evenement>delivery.[a-z-]+)\" [$__auto]))",
+          "expr": "sum by (evenement) (count_over_time({service=\"stalwart\"} | regexp \"(?P<evenement>delivery[.][a-z-]+)\" | evenement=~\".+\" [$__auto]))",
           "queryType": "range",
           "refId": "A",
-          "legendFormat": "{{status}}",
+          "legendFormat": "{{evenement}}",
           "hide": false
         }
       ],
@@ -594,7 +594,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "sent"
+              "options": "delivery.delivered"
             },
             "properties": [
               {
@@ -609,7 +609,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "deferred"
+              "options": "delivery.dsn-temp-fail"
             },
             "properties": [
               {
@@ -624,7 +624,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "bounced"
+              "options": "delivery.dsn-perm-fail"
             },
             "properties": [
               {
@@ -660,11 +660,11 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (code) (count_over_time({service=\"stalwart\"} | regexp \"code = (?P<code>[0-9]{3})\" [$__range]))",
+          "expr": "sum by (code) (count_over_time({service=\"stalwart\"} | regexp \"(?i)code[: =]+(?P<code>[0-9]{3})\" | code=~\".+\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
-          "legendFormat": "{{dsn}}",
+          "legendFormat": "{{code}}",
           "hide": false
         }
       ],
@@ -735,7 +735,7 @@
           "expr": "sum by (file) (count_over_time({service=\"stalwart\"} |= \"queueName = \" | regexp \"queueName = \\\"(?P<file>[a-z]+)\\\"\" [$__auto]))",
           "queryType": "range",
           "refId": "A",
-          "legendFormat": "p50",
+          "legendFormat": "{{file}}",
           "hide": false
         },
         {
@@ -744,10 +744,10 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum by (evenement) (count_over_time({service=\"stalwart\"} | regexp \"(?P<evenement>queue.[a-z-]+)\" [$__auto]))",
+          "expr": "sum by (evenement) (count_over_time({service=\"stalwart\"} | regexp \"(?P<evenement>queue[.][a-z-]+)\" | evenement=~\".+\" [$__auto]))",
           "queryType": "range",
           "refId": "B",
-          "legendFormat": "p95",
+          "legendFormat": "{{evenement}}",
           "hide": false
         }
       ],
@@ -1043,7 +1043,7 @@
     {
       "type": "stat",
       "title": "Erreurs de signature DKIM (relai)",
-      "description": "« dkim. » et « dkim2. » comptés ensemble : une règle ou un panneau libellé « dkim.* » est aveugle aux 13 événements de la famille « dkim2. » (mesuré dans la taxonomie). À zéro, rien n'a cassé à l'écriture de la signature. CE QUE CE N'EST PAS : « smtp.dkim-fail » est un échec de vérification À L'ENTRÉE — mesuré le 2026-11-19, il sort sur chaque soumission non signée (strict = false, result = []) et ne dit rien de notre signature sortante. Le « Signature DKIM désactivée » de l'application a disparu avec le listener retiré le 2026-11-17.",
+      "description": "« dkim. » et « dkim2. » comptés ensemble : une règle ou un panneau libellé « dkim.* » est aveugle aux 13 événements de la famille « dkim2. » (mesuré dans la taxonomie). Écrit en « dkim2?[.] » : le point seul est un joker en LogQL, et c'est lui qui faisait apparaître « queueId » parmi les noms d'événements du panneau « File du relai » (62 lignes mesurées). L'alternance a reçu « signer-not-found » et « signing-failed » le 2026-11-20, relevés dans le binaire : un objet Dkim disparu du plan rend exactement « dkim.signer-not-found », et le motif d'avant ne le voyait pas. Les noms restants des deux familles (pass, none, neutral, fail, hash-mismatch, verification-failed, temp-error, perm-error, chain-invalid, envelope-mismatch) sont des verdicts de vérification, pas des échecs de notre écriture. À zéro, rien n'a cassé à l'écriture de la signature — contrôle sur 7 jours de ce poste : 0 ligne. CE QUE CE N'EST PAS : « smtp.dkim-fail » est un échec de vérification À L'ENTRÉE — mesuré le 2026-11-19, il sort sur chaque soumission non signée (strict = false, result = []), 10 lignes sur 7 jours, et ne dit rien de notre signature sortante. Le « Signature DKIM désactivée » de l'application a disparu avec le listener retiré le 2026-11-17.",
       "datasource": {
         "type": "loki",
         "uid": "yabiladi-loki"
@@ -1055,7 +1055,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service=\"stalwart\"} |~ \"(dkim|dkim2).(build-error|public-key-error|recipe-error|signature-invalid|custody-broken|timestamp-invalid)\" [$__range]))",
+          "expr": "sum(count_over_time({service=\"stalwart\"} |~ \"dkim2?[.](build-error|signer-not-found|signing-failed|public-key-error|recipe-error|signature-invalid|custody-broken|timestamp-invalid)\" [$__range]))",
           "queryType": "instant",
           "instant": true,
           "refId": "A",
@@ -1342,7 +1342,7 @@
             "uid": "yabiladi-loki"
           },
           "editorMode": "code",
-          "expr": "{service=\"stalwart\"} |~ \"(delivery.dsn-temp-fail|delivery.connect-error|delivery.mx-lookup-failed|delivery.ip-lookup-failed)\"",
+          "expr": "{service=\"stalwart\"} |~ \"delivery[.](dsn-temp-fail|connect-error|mx-lookup-failed|ip-lookup-failed)\"",
           "queryType": "range",
           "refId": "A",
           "maxLines": 100,
