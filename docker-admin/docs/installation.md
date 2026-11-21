@@ -1,199 +1,102 @@
-# Installation
+# Installation de Yabiladi Docker Admin
 
-D'un dépôt fraîchement cloné à une console utilisable. Sur le serveur comme sur le
-poste de développement, à une différence près, signalée en son temps.
+## Pré-requis
 
-## Ce qui doit déjà être en place
+Docker Compose v2 et Python 3.8 ou plus récent sont requis sur le nœud.
 
-La pile suppose l'infrastructure déployée, parce qu'elle y emprunte trois choses
-et n'en crée aucune :
+Déployer d'abord l'infrastructure avec `../deploy.sh`. Elle crée le réseau
+`yabiladi_app`, démarre Traefik et matérialise les secrets Komodo depuis
+`deploy/secrets/komodo.sops.bin` vers `docker/legacy/komodo.env`.
 
-| Emprunté | Où il est créé | Vérifié par |
-| --- | --- | --- |
-| le réseau `yabiladi_app` | `../compose.yaml` | `validate.sh`, « réseau « yabiladi_app » présent » |
-| le fichier de comptes `/etc/traefik/htpasswd/user_yabiladi` monté dans Traefik | `../compose.yaml`, matérialisé par `../deploy.sh` depuis `deploy/secrets/htpasswd_user_yabiladi.sops.bin` | `validate.sh`, « le même fichier est lisible dans le conteneur Traefik » |
-| la console de sauvegarde DBackup, pour le job de nuit | `../compose.yaml` | `validate.sh`, section « Sauvegarde » |
+Le compte Basic Auth partagé doit aussi être matérialisé depuis le coffre. Le
+Core Komodo le lit dans le middleware Traefik ; l'authentification Komodo reste
+une seconde étape.
 
-Le volume `yabiladi_portainer_data` est le seul objet que cette pile exige sans
-le trouver : `scripts/deploy.sh` le crée s'il manque (`docker volume create` ne
-touche jamais un volume existant), et `../deploy.sh` le pose aussi, car le service
-`dbackup` le monte. Un `compose.yaml` qui démarre sur un volume absent refuse de
-partir plutôt que d'en créer un neuf et vide — c'est voulu.
+## Déploiement
 
-Ordre sur une machine neuve :
+Le script racine enchaîne automatiquement le déploiement docker-admin. Pour le
+rejouer seul :
 
 ```bash
-cd /opt/yabiladi-infra && ./deploy.sh          # l'infrastructure, puis cette pile à sa suite
+bash docker-admin/scripts/deploy.sh --dry-run
+bash docker-admin/scripts/deploy.sh
+bash docker-admin/scripts/validate.sh
 ```
 
-`./deploy.sh` enchaîne `docker-admin/scripts/deploy.sh` tout seul, après ses
-propres contrôles (fonction `deploy_admin_console`, en bout de parcours — la
-console est le dernier venu, son échec ne fait l'impasse ni sur le redémarrage
-d'Alloy ni sur l'état de l'infrastructure, qui s'affiche avant). Un échec de la
-console remonte et arrête le script avec son propre message : l'infrastructure
-reste posée, mais le geste est dit incomplet. Le dépôt n'étant pas garanti
-partout — une machine qui ne recevrait que le projet de l'infrastructure, par
-exemple — l'enchaînement s'efface en silence si `docker-admin/` n'existe pas, et
-`bash docker-admin/scripts/deploy.sh` reste jouable seul, à tout moment.
+Le déploiement sélectionne les services selon `YABILADI_NODE` :
 
-## Le réglage de la machine
+| Profil | Services |
+| --- | --- |
+| `imouzzer` | Core, MongoDB et Periphery |
+| `tarourt` | Periphery seule, connexion sortante vers le Core Imouzzer |
+| `local` | Core, MongoDB et Periphery |
 
-Deux lignes dans le `.env` **versionné** de la racine — c'est là que les quatre
-projets lisent, et cette pile n'a pas son propre fichier d'environnement :
+L'amorçage authentifie le compte admin Komodo depuis le secret SOPS et crée
+automatiquement les clés d'onboarding nécessaires. Aucune étape manuelle dans
+l'interface n'est requise. Chaque clé privée est persistée en mode `0600` dans
+`docker/legacy/komodo-onboarding-<nœud>.key`, séparément du secret SOPS, afin
+qu'un `git pull` et les redéploiements la conservent.
 
+Tarourt n'héberge pas le Core ni MongoDB : `komodo-tarourt.yabiladi.com` ne
+sert donc pas l'interface. Un basculement DNS vers Tarourt ne suffit pas en cas
+de panne d'Imouzzer ; il faudrait aussi y démarrer/restaurer le Core, MongoDB et
+les données persistantes Komodo.
+
+Les volumes MongoDB, clés et sauvegardes sont nommés et externes. Le script
+remplace les conteneurs sans supprimer ces volumes. Les anciens conteneurs
+Komodo du projet `yabiladi-infra` sont retirés lors de leur migration vers
+`yabiladi-docker-admin`.
+
+## Poste local
+
+Définir `YABILADI_NODE=local`, puis ajouter cette entrée au fichier hosts :
+
+```text
+127.0.0.1 komodo-imouzzer.yabiladi.com komodo.yabiladi.com
 ```
-ADMIN_TZ=Europe/Paris
-# ADMIN_PORTAINER_IMAGE=portainer/portainer-ce:2.45.3-alpine
-# ADMIN_DOZZLE_IMAGE=amir20/dozzle:v11.4.2-alpine
-```
 
-Les deux lignes commentées ne servent qu'à **figer** une version : après un
-rollback, ou pour attendre la prochaine mouture avant de la monter sur le
-serveur. Absentes, c'est le défaut écrit dans `compose.yaml` qui s'applique.
+`docker-admin/compose.override.yaml` désactive le résolveur Let's Encrypt sur
+ce poste. Traefik utilise alors le certificat local. L'URL est
+`https://komodo.yabiladi.com` ; `https://komodo-imouzzer.yabiladi.com` reste
+l'URL canonique de production et est également routé vers le même Core.
 
-Sur un poste de développement, un troisième fichier — ignoré par git — vide le
-résolveur ACME, puisque ni Let's Encrypt ne peut joindre cette machine ni son
-port 80 est exposé :
+Le certificat doit couvrir ce nom et être approuvé par Chrome. Depuis Git Bash,
+régénérer le certificat local (à refaire après toute régénération) :
 
 ```bash
-cp docker-admin/compose.override.yaml.example docker-admin/compose.override.yaml
+bash docker/traefik/generate-cert.sh
 ```
 
-C'est le même geste que pour `grafana`, `dbackup` et le tableau de bord Traefik.
-Sans lui, le premier `up` reste bloqué sur une demande de certificat qui aboutira
-de toute façon sur le serveur, pas ici.
-
-Le certificat de poste prend alors la main, et sa liste SAN doit porter chaque nom
-que les cinq projets déclarent dans leurs `Host(…)` — sinon Traefik répond avec
-son certificat par défaut, le handshake tombe avant la porte basicauth et le
-navigateur n'affiche jamais la fenêtre d'identification (mesuré le 2026-11-15 sur
-`logs`, `portainer`, `pub` ; docs/troubleshooting.md). Pour que le navigateur ne
-gargouille plus d'avertissement sur ce poste, une seule ligne, côté Windows, avec
-le dialogue de consentement qui va avec :
+Puis, depuis PowerShell à la racine du dépôt, ajouter uniquement le certificat
+public au magasin racine de l'utilisateur Windows :
 
 ```powershell
-Import-Certificate -FilePath 'C:\Yabiladi_Upgrade\Yabiladi-Infra\docker\traefik\certs\yabiladi.com.crt' `
-  -CertStoreLocation 'Cert:\CurrentUser\Root'
+certutil -user -f -addstore Root .\docker\traefik\certs\yabiladi.com.crt
+docker compose restart traefik
 ```
 
-À rejouer **à chaque génération de certificat** : l'empreinte change, le magasin
-reste.
+Confirmer l’ajout de l’autorité racine si Windows le demande. Chrome utilise ce
+magasin Windows ; le redémarrer s'il était déjà ouvert. Ne jamais importer ni
+distribuer `yabiladi.com.key`.
 
-## Déployer
+## Comptes Komodo
 
-```bash
-bash docker-admin/scripts/deploy.sh            # puis, pour ne lire que la configuration :
-bash docker-admin/scripts/deploy.sh --dry-run
-```
+Sur une base MongoDB neuve, le premier compte créé devient administrateur et
+est activé automatiquement. Les comptes créés ensuite sont désactivés par
+défaut : un administrateur doit ouvrir la gestion des utilisateurs et choisir
+**Enable User** pour le compte concerné. Ne pas activer l’auto-activation de
+tous les nouveaux comptes en production sans décision explicite.
 
-Ce que la commande fait, dans l'ordre :
+Les comptes et leurs rôles persistent dans `yabiladi_komodo_mongo_data`.
+Redéployer ou recréer les conteneurs ne réinitialise donc pas le premier
+administrateur. Sur un serveur déjà initialisé, conserver l’accès au compte
+administrateur existant ; la création d’un compte supplémentaire ne le remplace
+pas.
 
-1. contrôle la présence du volume et du réseau, crée le volume si absent ;
-2. `docker compose up -d` **sur les trois services de ce fichier** ;
-3. attend la santé de chacun (`/_ping` du mandataire, `:9000/` de Portainer,
-   `healthcheck` de Dozzle) ;
-4. ouvre les droits du volume pour le groupe 33 de la console de sauvegarde,
-   depuis le propre conteneur de Portainer (`backup.sh --grant-only`). C'est un
-   rappel : l'ouverture est déjà faite à chaque démarrage du service par son
-   entrypoint, et c'est ce qui couvre les fichiers nés après (`docs/backup-restore.md`,
-   « Les droits, c'est le job ») ;
-5. sonde les deux services en interne, puis depuis le réseau de Traefik.
+## Supervision
 
-Ce qu'elle ne fait pas : `git pull`, un `up` sur `../compose.yaml`, un redémarrage
-de Traefik, de Dagu ou de la console. Traefik n'en a pas besoin : son fournisseur
-Docker lit les évènements, et un routeur porté par un conteneur qui démarre
-apparaît à la seconde.
-
-## Le job de sauvegarde n'est pas créé ici
-
-Il est déclaré une ligne plus haut que tout le monde, dans
-`tools/backup/jobs.json` :
-
-```json
-{"name":"portainer-volume-backup","path":"portainer","label":"Sauvegarde quotidienne des données persistantes de Portainer CE.","schedule":"40 4 * * *"}
-```
-
-C'est `../deploy.sh` qui le pose dans la console, par
-`tools/backup/dbackup-bootstrap.mjs` (idempotent : il crée ce qui manque, ne
-déclare jamais un second adaptateur, ne réécrit pas un horaire changé à la souris).
-Après avoir ajouté la ligne, le déploiement de l'infrastructure est donc requis :
-
-```bash
-cd /opt/yabiladi-infra && ./deploy.sh
-```
-
-Vérification, côté console, sans ouvrir l'interface :
-
-```bash
-docker compose exec -T dbackup node /opt/backup-tools/run-job.mjs --list | grep portainer
-# · portainer-volume-backup  activé   schedule « 40 4 * * * »  dernière : Success le …
-```
-
-## Première visite : le compte administrateur de Portainer
-
-C'est la seule étape qui ne se joue pas en script, et elle a une fenêtre.
-
-Portainer refuse de démarrer sans compte administrateur et **l'offre pendant cinq
-minutes** après chaque démarrage du conteneur. Passé ce délai, la racine répond
-`307`, chaque appel d'API `303`, et l'interface reste close jusqu'à un
-redémarrage (mesuré sur 2.45.3, et c'est bien `adminmonitor` qui l'écrit dans ses
-journaux). Le mot de passe ne s'écrit donc ni dans ce dépôt, ni dans une ligne de
-commande, ni dans un journal : il se frappe dans un navigateur.
-
-```bash
-# 1. rouvrir la fenêtre
-cd /opt/yabiladi-infra/docker-admin
-docker compose --env-file ../.env -f compose.yaml restart portainer
-# 2. dans les cinq minutes : https://portainer.yabiladi.com  (compte basicauth, puis formulaire)
-```
-
-Sur le serveur, il faut aussi que les deux noms existent chez Cloudflare, en
-**DNS only** (nuage gris) comme `dagu`, `grafana`, `backups`, `traefik` et
-`navidrome` : la liste d'adresses compare l'adresse du pair TCP, et un passage par
-le réseau de Cloudflare la ferait juger une sortie de datacenter partagée avec des
-millions de visiteurs.
-
-## Contrôler
-
-```bash
-bash docker-admin/scripts/validate.sh --resources
-```
-
-Lecture seule de bout en bout. Le script se termine par le compte des réussites,
-des échecs et **des contrôles non jouables** — un contrôle qui n'a pas pu se jouer
-n'est pas un contrôle réussi. **77 contrôles**, joués deux fois le 2026-11-12 au
-soir sur ce poste : **74 réussites, 0 échec, 3 non joués** à la première passe ;
-**73, 1, 3** à la seconde. Passe du 2026-11-15, après l'ajout de `logs`,
-`portainer` et `pub` à la liste SAN du certificat local : **72, 0, 5**, et le
-total reste 77. Les deux non joués de plus ont une explication chacun, et aucune
-n'est une régression : l'empreinte au sol, parce que cette passe-là s'est jouée
-sans `--resources`, et la ligne Traefik, qui refuse désormais de conclure tant
-que son redémarrage — nécessaire au rechargement du certificat — date de moins
-de quinze minutes. Une troisième chose s'est vue ce jour-là, qui n'est pas un
-compte mais un contenu : le réglage `canAddHosts` de Dozzle est sorti `false`,
-alors qu'il était `true` les 12 et 13 novembre sur la même image et le même
-`command:` — d'où une ligne qui rend la valeur lue au lieu d'une promesse.
-
-Les trois non joués permanents sont volontairement hors de portée d'un script : le chemin
-authentifié (il faudrait le mot de passe), le compte administrateur de Portainer
-(à créer à la main, ci-dessus) et le réglage `canAddHosts` de Dozzle, qui se lit
-mais ne se commande pas depuis l'image (voir docs/security.md). S'y ajoute
-l'empreinte au sol, non mesurée sans `--resources`.
-
-L'échec de la seconde passe est la sonde sortante sur `https://www.yabiladi.com/`,
-et c'est le seul contrôle qui traverse un conteneur applicatif : `php` venait
-d'être recréé à 22:00:13, la sonde est partie dans la seconde qui a suivi. La
-ligne ne se contente pas de le dire — elle compare les deux chemins et rend
-`000` par Traefik **alors que nginx répond « 200 en 0.21s » en direct**, ce qui
-nomme la cause (connexions périmées que Traefik garde sur une adresse qui a
-changé, il retombe sur ses pieds au deuxième ou troisième essai) au lieu de
-courir après une régression qui n'existe pas. Aucun des trois conteneurs de cette
-pile n'est impliqué, et leur propre ligne à chacun est restée verte aux deux
-passes. Détails dans docs/troubleshooting.md.
-
-Pour jouer quand même le chemin authentifié, un opérateur qui tient le mot de
-passe peut passer deux variables dans son environnement — jamais dans un fichier :
-
-```bash
-ADMIN_TEST_USER=yabiladi ADMIN_TEST_PASSWORD='…' bash docker-admin/scripts/validate.sh
-```
+Les journaux des conteneurs et leurs mesures d'utilisation sont consultables
+dans Komodo. Periphery collecte les statistiques des conteneurs toutes les
+cinq secondes. MongoDB stocke l'état Core dans `yabiladi_komodo_mongo_data` et
+les clés générées dans `yabiladi_komodo_keys`; ne supprimer aucun de ces volumes
+lors d'une réinstallation.

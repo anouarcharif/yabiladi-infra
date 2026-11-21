@@ -1,5 +1,10 @@
 # Alerting Grafana provisionné par fichiers.
 
+Le contact point email inclut l'URL publique de l'instance Grafana dans le sujet
+et le corps. Avec `grafana-tarourt.yabiladi.com` ou
+`grafana-imouzzer.yabiladi.com`, chaque notification identifie donc le nœud qui
+a déclenché l'alerte, sans dupliquer les règles provisionnées.
+
 Grafana relit ce répertoire au démarrage et sur `POST
 /api/admin/provisioning/alerting/reload` — ce POST est désormais la dernière
 étape du déploiement (`reload_grafana_alerting()` dans `deploy.sh`) : les

@@ -31,6 +31,6 @@ MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
   -keyout "$CERT_DIR_OPENSSL/yabiladi.com.key" \
   -out "$CERT_DIR_OPENSSL/yabiladi.com.crt" \
   -subj "/CN=yabiladi.com" \
-  -addext "subjectAltName=DNS:yabiladi.com,DNS:www.yabiladi.com,DNS:en.yabiladi.com,DNS:es.yabiladi.com,DNS:ar.yabiladi.com,DNS:it.yabiladi.com,DNS:m.yabiladi.com,DNS:rac.yabiladi.com,DNS:static.yabiladi.com,DNS:regional.yabiladi.com,DNS:tribunes.yabiladi.com,DNS:islam.yabiladi.com,DNS:communiques.yabiladi.com,DNS:dagu.yabiladi.com,DNS:navidrome.yabiladi.com,DNS:backups.yabiladi.com,DNS:grafana.yabiladi.com,DNS:traefik.yabiladi.com,DNS:ws.yabiladi.com,DNS:logs.yabiladi.com,DNS:portainer.yabiladi.com,DNS:pub.yabiladi.com,DNS:www.web-strategie.ma,DNS:web-strategie.ma,DNS:localhost,IP:127.0.0.1"
+  -addext "subjectAltName=DNS:yabiladi.com,DNS:www.yabiladi.com,DNS:en.yabiladi.com,DNS:es.yabiladi.com,DNS:ar.yabiladi.com,DNS:it.yabiladi.com,DNS:m.yabiladi.com,DNS:rac.yabiladi.com,DNS:static.yabiladi.com,DNS:regional.yabiladi.com,DNS:tribunes.yabiladi.com,DNS:islam.yabiladi.com,DNS:communiques.yabiladi.com,DNS:dagu.yabiladi.com,DNS:navidrome.yabiladi.com,DNS:backups.yabiladi.com,DNS:grafana.yabiladi.com,DNS:traefik.yabiladi.com,DNS:komodo.yabiladi.com,DNS:komodo-imouzzer.yabiladi.com,DNS:ws.yabiladi.com,DNS:logs.yabiladi.com,DNS:portainer.yabiladi.com,DNS:pub.yabiladi.com,DNS:www.web-strategie.ma,DNS:web-strategie.ma,DNS:localhost,IP:127.0.0.1"
 
 printf 'Certificat généré : %s\n' "$CERT_DIR/yabiladi.com.crt"

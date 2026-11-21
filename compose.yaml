@@ -282,7 +282,7 @@ services:
       # Nom du routeur : `traefik-dashboard`, et non `traefik`, pour ne pas
       # coller au routeur interne `dashboard@internal` que Traefik déclare
       # lorsque api.insecure est actif chez une autre machine.
-      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.yabiladi.com`)"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`${TRAEFIK_HOSTNAME:-traefik.yabiladi.com}`)"
       - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
       - "traefik.http.routers.traefik-dashboard.tls=true"
       # Comme pour grafana : la vérité du serveur est posée une fois pour toutes
@@ -291,14 +291,11 @@ services:
       # certificat auto-signé de dynamic.yml, sans ligne à décommenter au « git
       # pull » du jour J.
       - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.traefik-dashboard.middlewares=traefik-ipallow,traefik-htpasswd"
+      - "traefik.http.routers.traefik-dashboard.middlewares=traefik-htpasswd"
       # Service interne : le tableau de bord est rendu par Traefik lui-même, il
       # n'y a donc pas de loadbalancer à déclarer ni de port à pointer.
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
-      # Liste blanche et compte repris tels quels de Dagu (mêmes variables, même
-      # fichier) : ce qui ouvre l'orchestrateur ouvre le routeur, et un écart
-      # entre les deux se corrigerait deux fois.
-      - "traefik.http.middlewares.traefik-ipallow.ipallowlist.sourceRange=${DAGU_ALLOWED_IPS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+      # Même Basic Auth bcrypt que Dagu, Grafana et DBackup; pas d'allowlist IP.
       - "traefik.http.middlewares.traefik-htpasswd.basicauth.usersfile=/etc/traefik/htpasswd/user_yabiladi"
       - "traefik.http.middlewares.traefik-htpasswd.basicauth.removeheader=true"
     networks:
@@ -327,6 +324,8 @@ services:
   #
   # L'ordonnanceur est interne au conteneur (journal « Found enabled jobs
   # count=N » au démarrage) : aucun DAG Dagu n'est nécessaire ici.
+  # Le volume de sauvegarde Komodo est partagé : docker-admin écrit les archives,
+  # DBackup les monte en lecture seule.
   dbackup:
     # Version épinglée : « latest » ferait varier le schéma de la base SQLite
     # et le format des archives sans que personne ne l'ait décidé.
@@ -408,6 +407,10 @@ services:
       # le script, et l'amorçage ne se rejoue que sur une machine neuve.
       - ./tools/backup:/opt/backup-tools:ro
       ### sources sauvegardées (lecture seule) ###
+      # Backups MongoDB/Komodo générés par le Core, à archiver à leur tour par
+      # DBackup. Sur Tarourt le volume est vide en pratique : le Core tourne sur
+      # Imouzzer, seule sa copie locale de ce volume compte.
+      - komodo_backups:/backup/komodo-backups:ro
       # Sous « /backup », la racine que déclare l'amorçage (« SOURCE_BASE » de
       # tools/backup/dbackup-bootstrap.mjs) : depuis le 2026-11-02 chaque montage
       # a son job, qui le désigne par un nom relatif — « media »,
@@ -507,15 +510,6 @@ services:
       # Même variable que les trois services, donc la cible est exactement l'arbre
       # que Grafana écrit, jamais un second chemin à tenir à jour.
       - ${LOGGING_HOST_DATA_PATH:-/data/logging}/grafana:/backup/grafana:ro
-      # Données persistantes de Portainer CE (pile docker-admin, projet Compose
-      # distinct). Un volume nommé, comme « traefik_acme » juste au-dessus : la
-      # console ne peut PAS lire la socket Docker — elle tourne en uid 1001 et le
-      # connecteur « docker-volume » de DBackup meurt en EACCES (mesuré) — donc
-      # c'est le volume lui-même qui se monte, en lecture seule, sous le nom du
-      # job. Les droits d'ouverture (groupe 33 sur /data) se posent par
-      # docker-admin/scripts/backup.sh --grant-only, geste du « open_acme_to_backup
-      # » ci-dessous appliqué à la donnée de l'autre pile.
-      - portainer_data:/backup/portainer:ro
       # Aucune source, aucun job pour l'index du moteur de recherche du forum —
       # ce n'est pas un trou de la scission : ses fichiers sortent en 0600 et
       # c'est le moteur qui impose ce mode (mesuré : un « touch » dans le même
@@ -545,12 +539,10 @@ services:
       start_period: 40s
     labels:
       - "traefik.enable=true"
-      # Un seul nom, backups.yabiladi.com, et le même compte basicauth qu'avant :
-      # c'est l'accès qui devait survivre au changement d'outil, pas la console.
-      # Comme sur les autres routeurs, la valeur du serveur est versionnée et le
-      # poste de développement vide le label dans compose.override.yaml.
+      # Le nom d'administration est sélectionné par deploy.sh selon l'IP de
+      # l'hôte (backups-tarourt ou backups-imouzzer).
       - "traefik.http.routers.dbackup.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.dbackup.rule=Host(`backups.yabiladi.com`)"
+      - "traefik.http.routers.dbackup.rule=Host(`${DBACKUP_HOSTNAME:-backups.yabiladi.com}`)"
       - "traefik.http.routers.dbackup.entrypoints=websecure"
       - "traefik.http.routers.dbackup.tls=true"
       - "traefik.http.routers.dbackup.middlewares=dbackup-htpasswd"
@@ -697,13 +689,9 @@ services:
       TZ: ${LOGGING_TZ:-Europe/Paris}
       # URL publique : sert aux liens des e-mails et aux redirections. Doit
       # finir par « / » et correspondre exactement au Host servi par Traefik.
-      # Les valeurs par défaut sont celles de la PRODUCTION : le fichier
-      # versionné doit rester valide tel quel sur le serveur, où le déploiement
-      # se fait par « git pull » sans retouche. Le poste de développement sert
-      # le même nom (résolution locale, certificat auto-signé de dynamic.yml) :
-      # rien ne diffère entre les deux environnements.
+      # L'URL et le domaine suivent le profil du nœud choisi par deploy.sh.
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-https://grafana.yabiladi.com/}
-      GF_SERVER_DOMAIN: ${GRAFANA_HOST:-grafana.yabiladi.com}
+      GF_SERVER_DOMAIN: ${GRAFANA_HOSTNAME:-grafana.yabiladi.com}
       # Compte d'administration : le nom est un identifiant, pas un secret, il
       # peut rester dans .env ; le mot de passe vit uniquement dans le fichier
       # monté sous /run/secrets (0640, root:472, hors git — voir la section
@@ -815,25 +803,21 @@ services:
       # sauvegarde et le site gardent leur activation manuelle, liée à leurs
       # propres bascules.
       - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.grafana.rule=Host(`grafana.yabiladi.com`)"
+      - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_HOSTNAME:-grafana.yabiladi.com}`)"
       - "traefik.http.routers.grafana.entrypoints=websecure"
       - "traefik.http.routers.grafana.tls=true"
-      - "traefik.http.routers.grafana.middlewares=grafana-ipallow,grafana-htpasswd"
+      - "traefik.http.routers.grafana.middlewares=grafana-htpasswd"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
-      # Protection : les DEUX mêmes mécanismes que Dagu (liste d'adresses +
-      # basicauth bcrypt), mais déclarés ici et non repris depuis le conteneur
-      # dagu. Mesuré le 2026-10-29 avec la reprise simple : pendant que dagu
-      # était recréé, Traefik répondait
+      # Protection par le même basicauth bcrypt que Dagu, sans filtre IP. Le
+      # middleware reste déclaré ici et non repris depuis le conteneur dagu.
+      # Mesuré le 2026-10-29 avec la reprise simple : pendant que dagu était
+      # recréé, Traefik répondait
       #   ERR error="middleware \"dagu-htpasswd@docker\" does not exist" routerName=grafana…
       # — un middleware déclaré par un conteneur n'existe que si CE conteneur
       # vit. Grafana se retrouvait sans barrière (routeur en erreur, 503) parce
       # qu'un service sans rapport avait redémarré.
-      # Ce qui est réutilisé reste bien les mêmes éléments : la variable
-      # d'environnement DAGU_ALLOWED_IPS (source unique du plafond d'adresses)
-      # et le fichier /etc/traefik/htpasswd/user_yabiladi (mêmes comptes, aucun
-      # nouveau mot de passe, aucune copie de hash). Changer le mot de passe dans
-      # ce fichier change donc aussi l'accès à Grafana.
-      - "traefik.http.middlewares.grafana-ipallow.ipallowlist.sourceRange=${DAGU_ALLOWED_IPS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+      # Le fichier /etc/traefik/htpasswd/user_yabiladi est partagé : changer ce
+      # compte change aussi l'accès à Dagu, Traefik et DBackup.
       - "traefik.http.middlewares.grafana-htpasswd.basicauth.usersfile=/etc/traefik/htpasswd/user_yabiladi"
       - "traefik.http.middlewares.grafana-htpasswd.basicauth.removeheader=true"
     healthcheck:
@@ -1100,14 +1084,9 @@ volumes:
   alloy_data:
     external: true
     name: yabiladi_alloy_data
-  # Volume de la pile docker-admin (portainer/portainer_data). Il est écrit par
-  # l'autre projet, monté ici en lecture seule pour le job
-  # « portainer-volume-backup », et déclaré « external » des deux côtés : c'est
-  # le seul moyen de partager une donnée entre deux projets Compose sans que la
-  # destruction de l'un emporte le volume de l'autre.
-  portainer_data:
+  komodo_backups:
     external: true
-    name: yabiladi_portainer_data
+    name: yabiladi_komodo_backups
 
 # Réseau interne de la centralisation : Alloy -> Loki et Grafana -> Loki y
 # circulent sans jamais toucher « app », et donc sans jamais toucher l'hôte.

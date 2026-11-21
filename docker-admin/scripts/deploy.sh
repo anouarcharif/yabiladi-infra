@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ============================================================================
-# Déploiement de la stack docker-admin — et d'elle seule.
+# Déploiement de la stack docker-admin (Komodo) — et d'elle seule.
 #
 #   bash docker-admin/scripts/deploy.sh            # depuis la racine du dépôt
 #   ./scripts/deploy.sh                            # depuis docker-admin/
@@ -11,19 +11,7 @@ set -euo pipefail
 # Ce que la règle de la pile interdit ici : piloter un autre projet. Ce script
 # ne fait donc NI « git pull », NI « docker compose up » sur ../compose.yaml, NI
 # redémarrage de Traefik, de Dagu ou de la console de sauvegarde. Il ne crée et
-# ne démarre que les trois conteneurs déclarés par docker-admin/compose.yaml.
-#
-# Ce qu'il fait malgré tout, et pourquoi c'est sans risque :
-#   - « docker volume create yabiladi_portainer_data » si le volume manque : un
-#     volume existant n'est jamais touché (la commande ne fait rien dans ce cas) ;
-#   - l'ouverture des droits du volume pour le groupe 33 de la console de
-#     sauvegarde, depuis LE PROPRE CONTENEUR DE PORTAINER : sans elle, chaque
-#     nuit, le job « portainer-volume-backup » sauterait la base Bolt en 0600 et
-#     se dirait « Success » avec zéro fichier (mesuré). Le service se fait déjà
-#     ce geste à chaque démarrage par son « entrypoint » ; cette passe-ci est le
-#     filet, et c'est elle qui couvre un volume repris d'ailleurs. Même geste que
-#     « open_acme_to_backup » et « open_grafana_data_to_backup » dans
-#     ../deploy.sh, sur la donnée de cette stack.
+# ne démarre que les services déclarés par docker-admin/compose.yaml.
 #
 # Traefik n'a pas besoin d'un redémarrage : son fournisseur Docker écoute les
 # évènements, un routeur déclaré par un conteneur qui démarre apparaît à la
@@ -53,6 +41,12 @@ export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 log() { printf '%s\n' "$*"; }
 die() { printf 'ERREUR: %s\n' "$*" >&2; exit 1; }
 
+node_profile="$REPO_DIR/deploy/node-profile.sh"
+[ -f "$node_profile" ] || die "profil serveur introuvable : $node_profile"
+# shellcheck source=../../deploy/node-profile.sh
+. "$node_profile"
+resolve_yabiladi_node || die "impossible d'identifier le nœud Yabiladi"
+
 # Une seule source d'interpolation pour les deux projets du dépôt : le « .env »
 # versionné racine. Compose ne lit pas le « .env » d'un autre répertoire que le
 # sien, d'où le drapeau — sans lui, « docker-admin/compose.yaml » n'interpolerait
@@ -71,6 +65,73 @@ compose() {
     fi
 }
 
+prepare_komodo() {
+    local envfile="$REPO_DIR/docker/legacy/komodo.env" line key value
+
+    if [ -f "$envfile" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in '' | \#*) continue ;; esac
+            [ "$line" != "${line%%=*}" ] || continue
+            key="${line%%=*}"
+            value="${line#*=}"
+            value="${value%\r}"
+            value="${value%\"}"
+            value="${value#\"}"
+            case "$key" in [0-9]* | *[!A-Za-z0-9_]*) continue ;; esac
+            export "$key=$value"
+        done < "$envfile"
+    fi
+
+    unset PERIPHERY_ONBOARDING_KEY KOMODO_TAROURT_ONBOARDING_KEY
+    export KOMODO_ONBOARDING_KEY_FILE="$REPO_DIR/docker/legacy/komodo-onboarding-${YABILADI_NODE}.key"
+    export KOMODO_ONBOARDING_PUBLIC_KEY_FILE="$REPO_DIR/docker/legacy/komodo-onboarding-${YABILADI_NODE}.pub"
+    export KOMODO_ONBOARDING_KEY_NAME="Yabiladi ${YABILADI_NODE}"
+
+    case "$YABILADI_NODE" in
+        tarourt)
+            export COMPOSE_PROFILES=komodo-periphery
+            export KOMODO_CERT_RESOLVER=letsencrypt
+            export KOMODO_API_ADDRESS="https://komodo-imouzzer.yabiladi.com"
+            export PERIPHERY_CORE_ADDRESS="wss://komodo-imouzzer.yabiladi.com"
+            export PERIPHERY_CONNECT_AS=Tarourt
+            export PERIPHERY_SERVER_ENABLED=false
+            log "  Komodo : Periphery Tarourt configuré en mode sortant"
+            ;;
+        imouzzer)
+            [ -f "$envfile" ] || die "docker/legacy/komodo.env absent sur Imouzzer"
+            export COMPOSE_PROFILES=komodo-core,komodo-periphery
+            export KOMODO_HOST="https://${KOMODO_HOSTNAME}"
+            export KOMODO_API_ADDRESS="http://127.0.0.1:9120"
+            export KOMODO_FIRST_SERVER_NAME="${KOMODO_FIRST_SERVER_NAME:-Imouzzer}"
+            export KOMODO_CERT_RESOLVER=letsencrypt
+            export PERIPHERY_CORE_ADDRESS="ws://komodo-core:9120"
+            export PERIPHERY_CONNECT_AS="$KOMODO_FIRST_SERVER_NAME"
+            export PERIPHERY_SERVER_ENABLED=false
+            log "  Komodo : Core, MongoDB et Periphery Imouzzer"
+            ;;
+        local)
+            export COMPOSE_PROFILES=komodo-core,komodo-periphery
+            export KOMODO_HOST="https://${KOMODO_HOSTNAME}"
+            export KOMODO_API_ADDRESS="http://127.0.0.1:9120"
+            export KOMODO_FIRST_SERVER_NAME="${KOMODO_FIRST_SERVER_NAME:-Local}"
+            export KOMODO_DATABASE_USERNAME="${KOMODO_DATABASE_USERNAME:-komodo_local}"
+            export KOMODO_DATABASE_PASSWORD="${KOMODO_DATABASE_PASSWORD:-komodo_local_password}"
+            export KOMODO_INIT_ADMIN_USERNAME="${KOMODO_INIT_ADMIN_USERNAME:-admin}"
+            export KOMODO_INIT_ADMIN_PASSWORD="${KOMODO_INIT_ADMIN_PASSWORD:-changeme_local}"
+            export KOMODO_LOCAL_AUTH=true
+            export KOMODO_CERT_RESOLVER=
+            export PERIPHERY_CORE_ADDRESS="ws://komodo-core:9120"
+            export PERIPHERY_CONNECT_AS="$KOMODO_FIRST_SERVER_NAME"
+            export PERIPHERY_SERVER_ENABLED=false
+            log "  Komodo : profil local Core, MongoDB et Periphery actif"
+            ;;
+        *)
+            die "profil Yabiladi non pris en charge pour Komodo : $YABILADI_NODE"
+            ;;
+    esac
+}
+
+prepare_komodo
 
 log "── docker-admin : déploiement de la console d'administration Docker ──"
 
@@ -79,6 +140,10 @@ log "── docker-admin : déploiement de la console d'administration Docker �
 command -v docker >/dev/null 2>&1 || die "docker introuvable dans le PATH"
 docker info >/dev/null 2>&1 || die "démon Docker injoignable — Docker Desktop lancé, sur ce poste ?"
 compose version >/dev/null 2>&1 || die "« docker compose » indisponible (v2 minimum)"
+PYTHON_BIN="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+[ -n "$PYTHON_BIN" ] || die "Python 3 requis pour créer automatiquement la clé d'onboarding Komodo"
+"$PYTHON_BIN" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' \
+    || die "Python 3.8 minimum requis pour l'amorçage automatique Komodo"
 [ -f "$REPO_DIR/.env" ] || die "$REPO_DIR/.env absent : ce dépôt porte les valeurs partagées, il doit être déployé avec"
 [ -f "$ADMIN_DIR/compose.yaml" ] || die "compose.yaml introuvable à côté de ce script"
 
@@ -89,20 +154,44 @@ docker network inspect yabiladi_app >/dev/null 2>&1 \
     || die "le réseau « yabiladi_app » n'existe pas : déployer d'abord l'infrastructure (« bash deploy.sh » à la racine du dépôt)"
 
 # Traefik en écoute. Sans lui, les labels ne servent à rien : la stack
-# démarrerait, serait en bonne santé, et aucune URL ne répondrait — le pire des
+# démarrerait, et aucune URL ne répondrait — le pire des
 # états, parce qu'il a l'air d'un succès.
 TRAEFIK_ID="$(docker ps -q --filter label=com.docker.compose.project=yabiladi-infra --filter label=com.docker.compose.service=traefik | head -1)"
 [ -n "$TRAEFIK_ID" ] \
-    || die "aucun conteneur Traefik démarré dans le projet « yabiladi-infra » : les deux URL resteraient muettes — déployer l'infrastructure d'abord"
+    || die "aucun conteneur Traefik démarré dans le projet « yabiladi-infra » : l'URL Komodo resterait muette — déployer l'infrastructure d'abord"
 
-# Le fichier de comptes que lisent déjà Dagu, Grafana, la console de sauvegarde
-# et le tableau de bord Traefik. On ne le crée pas, on ne le modifie pas, on ne
-# l'affiche pas : « ../deploy.sh » le repose depuis le coffre.
+# Le fichier de comptes partagé par les consoles. On ne le crée pas, on ne le
+# modifie pas, on ne l'affiche pas : « ../deploy.sh » le repose depuis le coffre.
 HTPASSWD="$REPO_DIR/docker/traefik/htpasswd/user_yabiladi"
 [ -f "$HTPASSWD" ] \
-    || die "aucun fichier de comptes « $HTPASSWD » : sans lui, les deux routeurs renverront 401 à tout le monde, y compris au bon mot de passe. Le reposer : « bash deploy.sh » à la racine (matérialisation du coffre)"
+    || die "aucun fichier de comptes « $HTPASSWD » : sans lui, Komodo renverra 401 à tout le monde. Le reposer : « bash deploy.sh » à la racine (matérialisation du coffre)"
 grep -q '\$2[aby]\$' "$HTPASSWD" \
-    || die "« $HTPASSWD » ne porte aucun hash bcrypt : Traefik v3 refuse silencieusement les formats Apache (apr1, MD5) et aucun mot de passe ne passerait"
+    || die "« $HTPASSWD » ne porte aucun hash bcrypt : Traefik v3 refuse silencieusement les formats Apache (apr1, MD5)"
+
+ensure_volumes() {
+    local volume
+    for volume in yabiladi_komodo_mongo_data yabiladi_komodo_mongo_config \
+                  yabiladi_komodo_backups yabiladi_komodo_keys; do
+        docker volume inspect "$volume" >/dev/null 2>&1 && continue
+        log "  création du volume $volume"
+        docker volume create "$volume" >/dev/null \
+            || die "impossible de créer le volume $volume"
+    done
+}
+
+retire_legacy_infra_komodo() {
+    local service ids
+    for service in komodo-mongo komodo-core komodo-periphery; do
+        ids="$(docker ps -aq \
+            --filter label=com.docker.compose.project=yabiladi-infra \
+            --filter "label=com.docker.compose.service=$service")"
+        [ -n "$ids" ] || continue
+        log "  retrait de l'ancien conteneur infra/$service"
+        # Container IDs returned by Docker contain no whitespace.
+        # shellcheck disable=SC2086
+        docker rm -f $ids >/dev/null || die "impossible de retirer infra/$service"
+    done
+}
 
 # --- Configuration ----------------------------------------------------------
 
@@ -113,95 +202,64 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 compose config -q || die "compose.yaml refusé par Compose — corriger avant de démarrer"
+ensure_volumes
+retire_legacy_infra_komodo
 
-# --- Volume -----------------------------------------------------------------
-
-# Le volume des données de Portainer est partagé avec la console de sauvegarde,
-# qui le déclare « external » dans ../compose.yaml : il doit exister AVANT le
-# premier « up -d » des deux côtés. Jamais destructif : un volume en place garde
-# son contenu, et cette commande ne le regarde pas.
-if ! docker volume inspect yabiladi_portainer_data >/dev/null 2>&1; then
-    log "  création du volume yabiladi_portainer_data (absent)"
-    docker volume create yabiladi_portainer_data >/dev/null \
-        || die "« docker volume create yabiladi_portainer_data » a échoué"
-else
-    log "  volume yabiladi_portainer_data : déjà en place (données conservées)"
+# Core must be available before the admin API can provision the Periphery key.
+if [ "$YABILADI_NODE" != tarourt ]; then
+    log "  démarrage de Komodo Core avant l'appairage…"
+    compose up -d komodo-mongo komodo-core \
+        || die "impossible de démarrer MongoDB et Komodo Core avant l'appairage"
 fi
+
+log "  création/vérification de la clé d'onboarding…"
+bootstrap_status="$("$PYTHON_BIN" "$SCRIPT_DIR/bootstrap_onboarding.py")" \
+    || die "amorçage automatique de la clé d'onboarding impossible"
+case "$bootstrap_status" in
+    created) log "  clé d'onboarding : créée et stockée localement (0600)" ;;
+    ready) log "  clé d'onboarding : valide et active" ;;
+    *) die "résultat inattendu de l'amorçage Komodo" ;;
+esac
 
 # --- Démarrage --------------------------------------------------------------
 
-log "  démarrage des trois conteneurs de la stack…"
+log "  démarrage des services Komodo…"
 compose up -d --remove-orphans \
     || die "« compose up -d » a échoué — « docker compose -f docker-admin/compose.yaml logs »"
 # « --remove-orphans » est borné à CE projet : il ne peut emporter qu'un
 # conteneur étiqueté « yabiladi-docker-admin » sans service correspondant dans
 # ce fichier, jamais un conteneur d'un autre projet.
 
-# --- Attente en bonne santé -------------------------------------------------
+# --- Attente de démarrage ---------------------------------------------------
 
-log "  attente de la santé des services…"
-en_sante() {
+log "  attente du démarrage des services…"
+services_actifs=(komodo-periphery)
+[ "$YABILADI_NODE" = tarourt ] || services_actifs=(komodo-mongo komodo-core komodo-periphery)
+services_running() {
     local cid etat
-    for service in docker-socket-proxy portainer dozzle; do
+    for service in "${services_actifs[@]}"; do
         cid="$(compose ps -q "$service" 2>/dev/null | head -1)"
         [ -n "$cid" ] || return 1
-        etat="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo inconnu)"
-        case "$etat" in
-            healthy | running) ;;
-            *) printf '%s=%s ' "$service" "$etat"; return 1 ;;
-        esac
+        etat="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || echo inconnu)"
+        [ "$etat" = running ] || { printf '%s=%s ' "$service" "$etat"; return 1; }
     done
     return 0
 }
 attendu=0
-until (en_sante); do
+until (services_running); do
     attendu=$((attendu + 5))
     if [ "$attendu" -ge 180 ]; then
-        log "  ATTENTION : santé jamais atteinte au bout de 180 s — journaux :"
+        log "  ATTENTION : services Komodo non démarrés au bout de 180 s — journaux :"
         compose ps
         compose logs --tail 20 || true
-        die "la stack n'est pas en bonne santé"
+        die "la stack Komodo n'est pas démarrée"
     fi
     sleep 5
 done
-log "  docker-socket-proxy, portainer et dozzle : en écoute"
-
-# --- Droits pour la console de sauvegarde -----------------------------------
-
-bash "$SCRIPT_DIR/backup.sh" --grant-only || log "  ATTENTION : droits du volume non ouverts — le job « portainer-volume-backup » se signalera « partiel »"
+log "  services Komodo : démarrés"
 
 # --- Contrôles --------------------------------------------------------------
 
-log "  contrôles HTTP…"
-# Trois sondeurs, trois questions différentes :
-#   - chaque service répond-il chez lui ;
-#   - Traefik l'atteint-il par le nom de service, sur « yabiladi_app » — le
-#     chemin exact qu'empruntera le visiteur, porte basicauth non compris ;
-#   - la porte basicauth est-elle bien fermée (contrôlée par « validate.sh »,
-#     qui seul voit l'URL publique).
-port_de() {
-    case "$1" in
-        portainer) printf '9000' ;;
-        dozzle) printf '8080' ;;
-        docker-socket-proxy) printf '2375' ;;
-    esac
-}
-sonde_service() { # $1 service, $2 chemin — depuis le conteneur lui-même
-    local service="$1" chemin="$2" port
-    port="$(port_de "$service")"
-    if [ "$service" = "dozzle" ]; then
-        compose exec -T dozzle /dozzle healthcheck >/dev/null 2>&1 && { log "  $service          → localhost:$port/$chemin : OK"; return 0; }
-    elif compose exec -T "$service" sh -c "wget -S -q -O /dev/null http://127.0.0.1:$port/$chemin 2>&1 | grep -qE ' (200|204|30[127])'"; then
-        log "  $service          → localhost:$port/$chemin : OK"
-        return 0
-    fi
-    if [ "$service" = "dozzle" ]; then
-        log "  $service          → localhost:$port/$chemin : PAS de réponse — « compose logs $service »"
-        return 1
-    fi
-    log "  ATTENTION : $service → localhost:$port/$chemin sans réponse — « compose logs $service »"
-    return 1
-}
 sonde_depuis_traefik() { # $1 nom de service, $2 port
     if docker exec "$TRAEFIK_ID" wget -S -q -O /dev/null --timeout=8 "http://$1:$2/" 2>&1 | grep -qE ' (200|204|30[127]|401)'; then
         log "  traefik → $1:$2               : joint"
@@ -211,22 +269,18 @@ sonde_depuis_traefik() { # $1 nom de service, $2 port
     return 1
 }
 
-sonde_service docker-socket-proxy _ping || true
-# La racaine, et non « /api/ping » : mesuré sur 2.45.3, ce chemin répond 404 et
-# « /api/* » passe à 303 dès que la fenêtre d'administrateur a expiré.
-sonde_service portainer "" || true
-sonde_service dozzle "" || true
-sonde_depuis_traefik portainer 9000 || true
-sonde_depuis_traefik dozzle 8080 || true
+if [ "$YABILADI_NODE" != tarourt ]; then
+    sonde_depuis_traefik komodo-core 9120 || true
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+        "http://127.0.0.1:9120/" 2>/dev/null || true)"
+    log "  komodo loopback :9120 → HTTP ${code:-aucune réponse}"
+fi
 
 log ""
 log "── déployé ──"
-log "  Portainer : https://portainer.yabiladi.com   (compte basicauth de Dagu)"
-log "  Dozzle    : https://logs.yabiladi.com        (compte basicauth de Dagu)"
-log "  Les deux portent l'authentification interne de leur outil en plus du"
-log "  basicauth : la première visite sur Portainer demande d'y créer le compte"
-log "  administrateur. Ce geste ne se joue pas en script : un mot de passe ne"
-log "  doit s'écrire ni dans ce dépôt, ni dans un journal, ni dans une commande."
+if [ "$YABILADI_NODE" = tarourt ]; then
+    log "  Periphery Tarourt connectée au Core Imouzzer"
+else
+    log "  Komodo : https://${KOMODO_HOSTNAME} (compte basicauth partagé)"
+fi
 log ""
-log "  Sauvegarde : job « portainer-volume-backup » de la console DBackup,"
-log "  planification « 40 4 * * * » — vérifier : bash scripts/validate.sh"

@@ -54,6 +54,14 @@
 /docker/legacy/geoip.env
 ###< identifiants MaxMind ###
 
+###> secrets Komodo ###
+# Credentials matérialisés depuis le bloc SOPS Komodo. Les clés d'onboarding
+# générées par node sont stockées séparément et ne voyagent pas dans Git.
+/docker/legacy/komodo.env
+/docker/legacy/komodo-onboarding-*.key
+/docker/legacy/komodo-onboarding-*.pub
+###< secrets Komodo ###
+
 ###> dépôt local des crédentials de la synchro d'IHM vers git ###
 # Le bloc scellé « ui-sync » se matérialise dans le dépôt du SITE, pas ici :
 # c'est le conteneur dagu — service du projet du site — qui relit les trois
@@ -141,5 +149,6 @@ keys.txt
 
 ###> artefacts régénérés ###
 node_modules/
+__pycache__/
 *.log
 ###< artefacts régénérés ###

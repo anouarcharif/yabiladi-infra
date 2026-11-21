@@ -51,10 +51,9 @@ Déploiement de l'infrastructure commune : Traefik, geoipupdate,
 DBackup, Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor.
 
   ./deploy.sh                  pull + secrets + dossiers + up -d + contrôles infra
-                               — la console d'administration (docker-admin :
-                               Portainer, Dozzle, mandataire de socket) suit dans
-                               le même geste ; ses conteneurs restent pilotés par
-                               docker-admin/scripts/deploy.sh
+                               — la console Komodo (Core, MongoDB et Periphery)
+                               suit dans le même geste ; ses conteneurs restent
+                               pilotés par docker-admin/scripts/deploy.sh
   ./deploy.sh --build          idem — ce dépôt ne construit plus aucune image de
                                service : la seule qui s'y fabriquait (le relais
                                SMTP) est partie le 2026-11-19 dans le projet
@@ -251,22 +250,14 @@ ensure_networks() {
 
 # --- Volumes -----------------------------------------------------------------
 
-# Six volumes appartiennent à l'infrastructure et portent un nom physique figé
-# dans compose.yaml ; les quatre compose (infra + site + factu + mediakit) les
-# déclarent tous « external: true », donc Compose refuse de les créer. Sur une
-# machine neuve — ou après un « docker volume prune » malheureux — c'est ici
-# qu'ils renaissent, avant le premier « up -d ». Un volume déjà présent n'est
-# jamais touché : la liste est exhaustive, pas destructive.
+# Les volumes consommés par l'infrastructure portent un nom physique figé.
+# Un volume déjà présent n'est jamais touché : la liste est exhaustive, pas
+# destructive.
 ensure_volumes() {
     local vol
-    # « yabiladi_portainer_data » appartient à la pile docker-admin, mais CE
-    # projet le monte en lecture seule pour le job « portainer-volume-backup » :
-    # absent, « docker compose up -d » échouerait sur le montage de dbackup, pas
-    # sur le projet voisin. Le créer ici ne touche aucune donnée — la commande
-    # ne fait rien quand le volume existe déjà.
     for vol in yabiladi_traefik_acme yabiladi_geoip_data \
                yabiladi_dbackup_data yabiladi_dbackup_tmp yabiladi_alloy_data \
-               yabiladi_portainer_data; do
+               yabiladi_komodo_backups; do
         docker volume inspect "$vol" >/dev/null 2>&1 && continue
         log "     création du volume $vol (absent — un projet voisin le déclare « external »)"
         docker volume create "$vol" >/dev/null \
@@ -509,31 +500,27 @@ bootstrap_backups() {
         || die "amorçage de la console de sauvegarde a échoué — « docker compose logs dbackup »"
 }
 
-# La console d'administration Docker (Portainer + Dozzle + son mandataire de
-# socket) est une pile à part du même dépôt : son propre « compose.yaml », ses
-# propres scripts, son propre cycle de vie — et son projet Compose, donc
-# « docker-admin/scripts/deploy.sh » reste seul maître de ses conteneurs.
+# Komodo est une pile à part dans le même dépôt : son propre « compose.yaml »,
+# ses propres scripts et son propre cycle de vie — « docker-admin/scripts/deploy.sh »
+# reste seul maître de ses conteneurs.
 #
 # Ce qui est enchaîné ici est l'ordre du geste, pas la mainmise : le jour de la
-# mise en production, une seule commande doit amener toute l'infrastructure, et une
-# console oubliée est un trou de supervision qui ne se voit que quand on en a
-# besoin. Validé le 2026-11-12 par le propriétaire du projet, à la question
-# « rien à adapter le jour J ? ».
+# mise en production, une seule commande doit amener toute l'infrastructure et
+# sa console d'administration.
 #
 # Un échec ici ne défait rien de l'infrastructure : les conteneurs de ce projet
-# sont déjà en marche, les contrôles viennent de passer avant, et le message rend
-# la commande à rejouer seule.
+# sont déjà en marche, et le message rend la commande à rejouer seule.
 deploy_admin_console() {
     local out status=0
     [ -f docker-admin/scripts/deploy.sh ] \
         || { log "     (docker-admin absent de ce dépôt : rien à enchaîner)"; return 0; }
-    log "     console d'administration Docker (docker-admin)…"
+    log "     console Komodo (docker-admin)…"
     # « || status=$? » : sous « set -euo pipefail », un pipeline qui échoue tuerait
     # le script avant que le message soit écrit. Le statut se relève, puis se dit.
     out="$(bash docker-admin/scripts/deploy.sh 2>&1)" || status=$?
     printf '%s\n' "$out" | sed 's/^/     /'
     [ "$status" -eq 0 ] \
-        || die "console d'administration non déployée — l'infrastructure, elle, est posée. Rejouer seul : bash docker-admin/scripts/deploy.sh"
+        || die "console Komodo non déployée — l'infrastructure, elle, est posée. Rejouer seul : bash docker-admin/scripts/deploy.sh"
 }
 
 # Le magasin ACME (certificats Let's Encrypt) est écrit par Traefik dans le volume
@@ -765,14 +752,15 @@ checks_infra() {
 
     # Le port 443, par le nom que le navigateur taperait : le DNS public et le
     # fichier hosts du poste ne décident pas de ce que cette ligne mesure. Les
-    # trois noms servis par CE dépôt (grafana, tableau de bord Traefik, console
+    # les noms servis par CE projet (grafana, tableau de bord Traefik, console
     # de sauvegarde) portent le résolveur ACME dans le fichier versionné : sur
     # le serveur, la réponse attendue au premier passage est un certificat
     # Let's Encrypt. Un CN auto-signé ici veut dire soit que le nom ne pointe
     # pas encore vers cette machine, soit que le compose.override.yaml du poste
     # de développement a atterri sur le serveur — ses labels « certresolver »
     # vides, ACME ne se déclenche jamais seul, et rien n'avertit personne.
-    for h in grafana.yabiladi.com traefik.yabiladi.com backups.yabiladi.com; do
+    for h in "${DAGU_HOSTNAME:-dagu.yabiladi.com}" "${DBACKUP_HOSTNAME:-backups.yabiladi.com}" \
+             "${GRAFANA_HOSTNAME:-grafana.yabiladi.com}" "${TRAEFIK_HOSTNAME:-traefik.yabiladi.com}"; do
         crt=$(echo | openssl s_client -connect 127.0.0.1:443 -servername "$h" 2>/dev/null \
                   | openssl x509 -noout -issuer -enddate 2>/dev/null | tr '\n' ' ')
         printf '  tls %-24s %s\n' "$h" "${crt:-aucun certificat}"
@@ -849,6 +837,14 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ "$verbe" = deploy ] || [ "$verbe" = build ] || [ "$verbe" = secrets ]; then
+    # Keep both hosts' administration routes distinct while retaining an
+    # explicit local profile for development workstations.
+    # shellcheck source=deploy/node-profile.sh
+    . "$REPO/deploy/node-profile.sh"
+    resolve_yabiladi_node || die "impossible d'identifier le nœud Yabiladi"
+fi
+
 # Deux filtres, dans cet ordre : la colonne « project » du manifeste retient les
 # entrées de l'infrastructure, puis SECRETS_ONLY — s'il est posé — n'en garde que
 # les fragments cités. Sans SECRETS_ONLY, TOUTES les lignes « infra » se
@@ -868,6 +864,7 @@ done
 # s'est retrouvé hors de la portée du site (voir le deploy.sh de CE projet).
 if [ -z "${SECRETS_ONLY:-}" ]; then
     SECRETS_ONLY='env.local,dbackup,geoip,htpasswd,grafana-admin'
+    [ "${YABILADI_NODE:-}" = local ] || SECRETS_ONLY="${SECRETS_ONLY},komodo"
 fi
 export SECRETS_ONLY TARGET_PROJECT
 
@@ -901,6 +898,7 @@ case "$verbe" in
         open_grafana_data_to_backup
         bootstrap_backups
         ensure_logging_mounts
+        deploy_admin_console
         checks_infra
         ;;
 

@@ -1,76 +1,49 @@
-# docker-admin — l'administration de Docker et la lecture des journaux
+# Yabiladi Docker Admin — Komodo
 
-Deux interfaces, trois conteneurs, un seul dépôt : celui de l'infrastructure.
-Portainer répond à « qu'est-ce qui tourne, et je le change comment ? », Dozzle à
-« que dit ce conteneur, maintenant ? ». Ni l'une ni l'autre ne remplace ce qui
-existe déjà : Loki et Grafana gardent l'historique sur trente jours, Dagu garde
-l'ordonnancement, et `deploy.sh` de chaque projet garde la main sur ses conteneurs.
+Komodo est la console d'administration des conteneurs Docker. Son Core, sa base
+MongoDB et le Periphery local sont déployés ici, dans le projet Compose
+`yabiladi-docker-admin`. Le Periphery de Tarourt utilise le même projet et se
+connecte au Core d'Imouzzer en mode sortant.
 
-La pile est indépendante : son `compose.yaml`, ses scripts, son volume. Elle se
-déploie sans toucher aux trois projets applicatifs, et aucun de ses scripts ne
-pilote autre chose qu'elle-même.
+Komodo remplace Dozzle pour les deux besoins de supervision de cette pile :
+journaux des conteneurs et mesures CPU/mémoire. Periphery collecte les mesures
+des conteneurs toutes les cinq secondes (`PERIPHERY_CONTAINER_STATS_POLLING_RATE`).
 
-## Ce qui tourne
+## Accès et sécurité
 
-| Service | Image (épinglée) | Rôle | Socket Docker |
-| --- | --- | --- | --- |
-| `portainer` | `portainer/portainer-ce:2.45.3-alpine` | administration complète de l'hôte | montée en **écriture** |
-| `docker-socket-proxy` | `tecnativa/docker-socket-proxy:v0.5.0` | filtre devant la socket pour Dozzle | montée en **lecture seule**, et rien ne passe sans y être nommé |
-| `dozzle` | `amir20/dozzle:v11.4.2-alpine` | journaux temps réel | **aucune** — elle parle au mandataire |
+Le Core est servi sur `https://komodo-imouzzer.yabiladi.com` et l'alias
+`https://komodo.yabiladi.com`, derrière Traefik et le Basic Auth bcrypt partagé,
+puis l'authentification Komodo. Son port 9120 n'est publié que sur le loopback.
+Le Periphery n'expose aucun port et se connecte au Core en sortie.
 
-Les variantes `-alpine` sont un choix mesuré, pas un goût : à partir de 2.45,
-l'image standard de Portainer est sans shell — donc sans sonde de santé possible,
-et sans moyen d'ouvrir les droits de son volume à la console de sauvegarde, ni à
-l'installation ni par son propre `entrypoint`.
+Periphery monte le socket Docker pour administrer l'hôte ; ce droit équivaut à
+un contrôle complet du moteur Docker. Les API terminal et exec de Periphery
+restent désactivées. Dozzle et son `docker-socket-proxy` ont été retirés : ils
+ne sont pas nécessaires pour consulter les journaux et mesures dans Komodo.
+Voir [docs/security.md](docs/security.md).
 
-## Où ça s'ouvre
-
-| Adresse | Derrière |
-| --- | --- |
-| `https://portainer.yabiladi.com` | plage d'adresses `DAGU_ALLOWED_IPS`, puis le compte basicauth de Dagu, puis le compte administrateur propre à Portainer |
-| `https://logs.yabiladi.com` | plage d'adresses, puis le même compte basicauth |
-
-Aucun des trois conteneurs ne publie de port sur l'hôte (vérifié par
-`scripts/validate.sh` : « aucun port publié sur l'hôte », trois fois). Le seul
-chemin jusqu'à eux passe par Traefik, l'unique proxy de la machine.
-
-Le fichier de comptes est celui des cinq autres interfaces d'administration
-(`docker/traefik/htpasswd/user_yabiladi`, matérialisé depuis le coffre) : mêmes
-identifiants partout, aucun mot de passe de plus à connaître, aucune copie de
-hash à maintenir. Les deux barrières ajoutées — liste d'adresses puis compte —
-sont exactement celles de Grafana, dans le même ordre.
-
-## Comment on agit dessus
+## Déploiement
 
 ```bash
-bash docker-admin/scripts/deploy.sh      # déployer ou mettre à jour CETTE pile, et elle seule
-bash docker-admin/scripts/validate.sh    # 77 contrôles, lecture seule, code de sortie qui dit vrai
-bash docker-admin/scripts/backup.sh      # sauvegarder les données de Portainer maintenant, et le prouver
-bash docker-admin/scripts/rollback.sh --list   # versions en service et tags publiés, avant de rétrograder
+bash docker-admin/scripts/deploy.sh --dry-run
+bash docker-admin/scripts/deploy.sh
+bash docker-admin/scripts/validate.sh
 ```
 
-Chacun rend `--help`. Aucun ne fait `git pull`, aucun ne redémarre Traefik,
-aucun n'appelle `docker system prune`, aucun ne touche un conteneur d'un autre
-projet.
+Le déploiement complet `../deploy.sh` matérialise d'abord les secrets du coffre
+puis enchaîne ce script. Le déploiement autonome suppose donc que
+`docker/legacy/komodo.env` a déjà été matérialisé sur le nœud serveur.
 
-`../deploy.sh` — celui de l'infrastructure — enchaîne le premier à la fin de son
-parcours : un seul geste le jour de la mise en production. Rien ici ne pilote
-l'inverse, et le script reste jouable seul.
+Le script amorce aussi automatiquement l'appairage des Periphery avec Core à
+partir du compte admin Komodo contenu dans le secret. Les clés privées sont
+persistées localement, hors SOPS et hors Git ; aucune création ni acceptation
+manuelle dans l'interface n'est nécessaire.
 
-## Sauvegarde
+Le profil `local` sert Komodo sur `komodo.yabiladi.com`; sur le poste, ajouter
+`127.0.0.1 komodo.yabiladi.com` au fichier hosts. En production, l'URL canonique
+est `komodo-imouzzer.yabiladi.com`. Le profil de production choisit
+Core/MongoDB/Periphery sur Imouzzer et Periphery seul sur Tarourt.
 
-Le volume `yabiladi_portainer_data` est monté en lecture seule sous
-`/backup/portainer` dans le conteneur de la console DBackup, et le job
-`portainer-volume-backup` (planification `40 4 * * *`, la dernière minute libre
-de la série du matin) l'archive chaque nuit. Le pourquoi du montage plutôt que
-du connecteur « volume Docker » de la console, le rituel des droits et la
-procédure de restauration jouée pour de vrai sont dans
-[docs/backup-restore.md](docs/backup-restore.md).
-
-## Documentation
-
-- [docs/installation.md](docs/installation.md) — d'un dépôt vierge à la console ouverte, premier compte compris.
-- [docs/security.md](docs/security.md) — ce qui protège quoi, et ce qui reste ouvert.
-- [docs/maintenance.md](docs/maintenance.md) — montée de version, rollback, mesures réelles de CPU et de RAM.
-- [docs/backup-restore.md](docs/backup-restore.md) — le job, l'archive, la restauration.
-- [docs/troubleshooting.md](docs/troubleshooting.md) — symptôme, cause mesurée, remède.
+Les volumes MongoDB, clés Komodo et sauvegardes sont nommés et externes ; le
+déploiement remplace les conteneurs sans supprimer ces volumes. `komodo_backups`
+est partagé en lecture seule avec DBackup.

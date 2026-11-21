@@ -40,3 +40,12 @@ contactPoints:
         settings:
           addresses: anouar@yabiladi.com
           singleEmail: false
+          subject: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} — {{ .ExternalURL }}'
+          message: |
+            Instance Grafana : {{ .ExternalURL }}
+            Statut : {{ .Status }}
+            {{ range .Alerts }}
+            Alerte : {{ .Labels.alertname }}
+            Résumé : {{ .Annotations.summary }}
+            Détails : {{ .Annotations.description }}
+            {{ end }}

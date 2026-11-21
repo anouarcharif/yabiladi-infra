@@ -2,8 +2,8 @@
 
 Infrastructure commune de la pile : Traefik, geoipupdate, DBackup,
 Loki/Alloy/Grafana, Prometheus/node_exporter/cAdvisor, et la console
-d'administration Docker sous `docker-admin/` (Portainer, Dozzle, leur mandataire
-de socket). Se déploie en premier (`git pull` puis `./deploy.sh`), chaque projet —
+d'administration Komodo sous `docker-admin/` (Core, MongoDB et Periphery). Se
+déploie en premier (`git pull` puis `./deploy.sh`), chaque projet —
 site, facturation, médiakit — tenant ensuite ses propres conteneurs avec son
 propre script. `./deploy.sh` enchaîne d'ailleurs `docker-admin/scripts/deploy.sh`
 en bout de parcours : une seule commande amène la machine, et la console reste
@@ -29,10 +29,20 @@ dépôt à portée. Quand il échoue, les deux dépôts se mettent à jour et s'
 `./deploy.sh` l'un après l'autre : `git pull` ici et là, rien à décommenter.
 
 Enfin, les consoles `dagu`, `grafana`, `backups`, `traefik` et `navidrome` restent
-en **DNS only** chez Cloudflare (nuage gris). Leurs barrières —
-`ipallowlist.sourceRange` sur `DAGU_ALLOWED_IPS` ici et dans
-`docker/traefik/dynamic.yml` — comparent l'adresse du pair TCP : proxifiées, elles
-jugeraient une sortie de datacenter partagée avec des millions de visiteurs.
+en **DNS only** chez Cloudflare (nuage gris). Komodo est accessible en HTTPS,
+protégé par le Basic Auth bcrypt partagé puis son authentification propre. Les
+flux publics du site, eux, passent par Cloudflare.
+
+Sur les deux nœuds, Dagu et DBackup ont des noms séparés :
+`dagu-tarourt.yabiladi.com` / `backups-tarourt.yabiladi.com` pour
+`57.128.22.220`, et `dagu-imouzzer.yabiladi.com` /
+`backups-imouzzer.yabiladi.com` pour `57.128.22.216`. Grafana et le tableau Traefik
+suivent la même convention. Le Core Komodo est servi sur
+`komodo-imouzzer.yabiladi.com` (l'alias `komodo.yabiladi.com` mène au même
+Core) ; le Periphery de Tarourt s'y connecte en sortie.
+`deploy.sh` détermine le nœud depuis son IPv4 globale via
+`deploy/node-profile.sh`. Sur un poste de développement, définir
+`YABILADI_NODE=local` pour servir Komodo sur `komodo.yabiladi.com`.
 
 ## Les retouches d'interface rentrent dans git toutes seules
 
