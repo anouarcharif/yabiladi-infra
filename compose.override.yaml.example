@@ -37,23 +37,6 @@ services:
     labels:
       - "traefik.http.routers.traefik-dashboard.tls.certresolver="
 
-  grafana:
-    labels:
-      - "traefik.http.routers.grafana.tls.certresolver="
-    # « !override » : la liste est REMPLACÉE, pas ajoutée. Compose fusionne les
-    # montages par destination, mais sur une séquence il écrit la liste entière —
-    # répéter les deux lignes montantes (provisionnement, dashboards) est donc
-    # obligatoire, sinon la seule mention du volume nommé ferait disparaître les
-    # panneaux et les règles d'alerte versionnés.
-    volumes: !override
-      # Le bind de LOGGING_HOST_DATA_PATH (/data/logging) n'existe pas sur ce
-      # poste, et sa racine inventée par Docker appartiendrait au démon, pas à
-      # l'UID 472 du conteneur : « cannot open the database file ». Un volume
-      # nommé règle les deux.
-      - grafana_data:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
-
   dbackup:
     labels:
       - "traefik.http.routers.dbackup.tls.certresolver="
@@ -99,11 +82,6 @@ services:
       # Discothèque des quatre antennes : le même arbre que celui que montent les
       # conteneurs radio du site.
       - <discotheque>:/backup/radio-content:ro
-      # Base Grafana. Si la pile de mesures est sur un volume nommé (voir le bloc
-      # « grafana » plus haut), monter CE VOLUME et non un chemin inventé : mesuré
-      # le 2026-11-12, « /backup/grafana » pointé sur un dossier créé par Docker
-      # donnait une archive de 0 octet annoncée « réussie ».
-      - grafana_data:/backup/grafana:ro
 
   # ---------------------------------------------------------------------------
   # Déplacement des données de la pile de mesure sur le stockage du VM Docker
@@ -119,7 +97,7 @@ services:
   # donc local au poste de développement, et il n'y a rien à reporter en
   # production.
   #
-  # « docker compose down -v » purgerait ces trois volumes (et aussi
+  # « docker compose down -v » purgerait ces deux volumes (et aussi
   # yabiladi_traefik_acme, yabiladi_dbackup_data et yabiladi_alloy_data, qui
   # portent le même nom physique que sur le serveur) : ne pas le faire à la
   # légère.
@@ -214,10 +192,13 @@ services:
   #     TZ: Europe/Paris
 
 volumes:
-  # Noms volontairement SANS préfixe : ces trois volumes sont propres au poste
-  # de développement, Compose les crée sous le nom du projet (yabiladi-infra-…)
-  # et un « down -v » local ne touchera jamais les volumes réels du serveur, qui
-  # portent le nom physique « yabiladi_… » fixé dans compose.yaml.
+  # Deux formes, et le choix se voit au nom que Docker donne au volume. Telle
+  # qu'écrite ici, chaque entrée est créée sous le nom du projet
+  # (« yabiladi-infra_loki_data »). Le fichier réellement joué sur le poste du
+  # 2026-11-21 déclare au contraire chaque entrée « external: true » avec le nom
+  # physique du serveur (« yabiladi_loki_data ») : c'est ainsi que la base locale
+  # de Grafana s'appelait « yabiladi_grafana_data ». Sous cette seconde forme,
+  # un « docker compose down -v » détruit des volumes qui portent le même nom
+  # que ceux de la production — geste à ne jamais rejouer sur la cible.
   loki_data:
-  grafana_data:
-  prometheus_data
+  prometheus_data:
