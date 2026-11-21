@@ -33,9 +33,10 @@ Le déploiement sélectionne les services selon `YABILADI_NODE` :
 
 L'amorçage authentifie le compte admin Komodo depuis le secret SOPS et crée
 automatiquement les clés d'onboarding nécessaires. Aucune étape manuelle dans
-l'interface n'est requise. Chaque clé privée est persistée en mode `0600` dans
+l'interface n'est requise. Chaque clé privée est persistée dans
 `docker/legacy/komodo-onboarding-<nœud>.key`, séparément du secret SOPS, afin
-qu'un `git pull` et les redéploiements la conservent.
+qu'un `git pull` et les redéploiements la conservent. Le fichier est limité au
+mode `0600` sur Linux et au compte courant par ACL sur Windows.
 
 Tarourt n'héberge pas le Core ni MongoDB : `komodo-tarourt.yabiladi.com` ne
 sert donc pas l'interface. Un basculement DNS vers Tarourt ne suffit pas en cas

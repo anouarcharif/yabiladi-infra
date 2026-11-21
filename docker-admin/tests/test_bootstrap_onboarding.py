@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import bootstrap_onboarding
@@ -17,8 +18,8 @@ class FakeApi:
 
     def __call__(self, endpoint, payload, jwt=None):
         self.calls.append((endpoint, payload, jwt))
-        if endpoint == "/auth":
-            return {"jwt": "admin-jwt"}
+        if endpoint == "/auth/login/LoginLocalUser":
+            return {"type": "Jwt", "data": {"jwt": "admin-jwt"}}
         if endpoint == "/read/ListOnboardingKeys":
             return list(self.keys)
         if endpoint == "/write/CreateOnboardingKey":
@@ -71,6 +72,40 @@ class BootstrapOnboardingTests(unittest.TestCase):
         self.assertEqual(len(self.api.keys), 1)
         if os.name == "posix":
             self.assertEqual(stat.S_IMODE(self.key_path.stat().st_mode), 0o600)
+
+    def test_default_api_uses_core_address(self):
+        create_response = {
+            "private_key": "private-1",
+            "created": {"public_key": "public-private-1"},
+        }
+        with patch.object(
+            bootstrap_onboarding,
+            "post_json",
+            side_effect=[
+                {"type": "Jwt", "data": {"jwt": "admin-jwt"}},
+                [],
+                create_response,
+            ],
+        ) as post_json:
+            status = bootstrap_onboarding.ensure_onboarding_key(
+                "http://komodo",
+                "admin",
+                "password",
+                "Yabiladi Tarourt",
+                self.key_path,
+                self.public_path,
+            )
+
+        self.assertEqual(status, "created")
+        self.assertEqual(
+            post_json.call_args_list[0],
+            call(
+                "http://komodo",
+                "/auth/login/LoginLocalUser",
+                {"username": "admin", "password": "password"},
+                None,
+            ),
+        )
 
     def test_reuses_enabled_key_on_redeployment(self):
         self.ensure_key()

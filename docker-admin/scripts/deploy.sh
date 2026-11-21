@@ -40,6 +40,13 @@ export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
 log() { printf '%s\n' "$*"; }
 die() { printf 'ERREUR: %s\n' "$*" >&2; exit 1; }
+native_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
 
 node_profile="$REPO_DIR/deploy/node-profile.sh"
 [ -f "$node_profile" ] || die "profil serveur introuvable : $node_profile"
@@ -67,6 +74,7 @@ compose() {
 
 prepare_komodo() {
     local envfile="$REPO_DIR/docker/legacy/komodo.env" line key value
+    local onboarding_key_file onboarding_public_key_file
 
     if [ -f "$envfile" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
@@ -83,8 +91,10 @@ prepare_komodo() {
     fi
 
     unset PERIPHERY_ONBOARDING_KEY KOMODO_TAROURT_ONBOARDING_KEY
-    export KOMODO_ONBOARDING_KEY_FILE="$REPO_DIR/docker/legacy/komodo-onboarding-${YABILADI_NODE}.key"
-    export KOMODO_ONBOARDING_PUBLIC_KEY_FILE="$REPO_DIR/docker/legacy/komodo-onboarding-${YABILADI_NODE}.pub"
+    onboarding_key_file="$REPO_DIR/docker/legacy/komodo-onboarding-${YABILADI_NODE}.key"
+    onboarding_public_key_file="$REPO_DIR/docker/legacy/komodo-onboarding-${YABILADI_NODE}.pub"
+    export KOMODO_ONBOARDING_KEY_FILE="$(native_path "$onboarding_key_file")"
+    export KOMODO_ONBOARDING_PUBLIC_KEY_FILE="$(native_path "$onboarding_public_key_file")"
     export KOMODO_ONBOARDING_KEY_NAME="Yabiladi ${YABILADI_NODE}"
 
     case "$YABILADI_NODE" in
@@ -213,7 +223,8 @@ if [ "$YABILADI_NODE" != tarourt ]; then
 fi
 
 log "  création/vérification de la clé d'onboarding…"
-bootstrap_status="$("$PYTHON_BIN" "$SCRIPT_DIR/bootstrap_onboarding.py")" \
+bootstrap_script="$(native_path "$SCRIPT_DIR/bootstrap_onboarding.py")"
+bootstrap_status="$("$PYTHON_BIN" "$bootstrap_script")" \
     || die "amorçage automatique de la clé d'onboarding impossible"
 case "$bootstrap_status" in
     created) log "  clé d'onboarding : créée et stockée localement (0600)" ;;

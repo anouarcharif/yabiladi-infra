@@ -60,7 +60,8 @@ if [ -n "$periphery" ]; then
     for setting in PERIPHERY_DISABLE_TERMINALS=true \
                    PERIPHERY_DISABLE_CONTAINER_TERMINALS=true \
                    PERIPHERY_CONTAINER_STATS_POLLING_RATE=5-sec \
-                   PERIPHERY_ONBOARDING_KEY_FILE=/run/secrets/komodo-onboarding-key; do
+                   PERIPHERY_ONBOARDING_KEY_FILE=/run/secrets/komodo-onboarding-key \
+                   PERIPHERY_CORE_PUBLIC_KEYS=file:/config/keys/core.pub; do
         printf '%s\n' "$envvars" | grep -Fxq "$setting" \
             && ok "Periphery : $setting" \
             || no "Periphery : $setting absent"
@@ -77,10 +78,28 @@ if [ -n "$periphery" ]; then
 
     onboarding_file="$REPO_DIR/docker/legacy/komodo-onboarding-${YABILADI_NODE}.key"
     if [ -f "$onboarding_file" ] && [ -s "$onboarding_file" ]; then
-        onboarding_mode="$(stat -c '%a' "$onboarding_file" 2>/dev/null || true)"
-        [ "$onboarding_mode" = 600 ] \
-            && ok "Cle d'onboarding : fichier present en mode 0600" \
-            || no "Cle d'onboarding : mode incorrect (${onboarding_mode:-inconnu})"
+        if command -v cygpath >/dev/null 2>&1 \
+            && command -v icacls.exe >/dev/null 2>&1 \
+            && command -v whoami.exe >/dev/null 2>&1; then
+            windows_key_file="$(cygpath -w "$onboarding_file")"
+            windows_acl="$(icacls.exe "$windows_key_file" 2>/dev/null | tr -d '\r')"
+            windows_acl_entries="$(printf '%s\n' "$windows_acl" | sed '/^[[:space:]]*$/d; $d')"
+            windows_acl_count="$(printf '%s\n' "$windows_acl_entries" | wc -l | tr -d ' ')"
+            windows_acl_entry="$(printf '%s\n' "$windows_acl_entries" | sed -n '1p')"
+            expected_account="$(printf '%s\\%s' "$USERDOMAIN" "$USERNAME" | tr '[:upper:]' '[:lower:]')"
+            actual_account="$(printf '%s\n' "$windows_acl_entry" | sed -E 's/.* ([^ ]+):.*/\1/' | tr '[:upper:]' '[:lower:]')"
+            actual_permissions="${windows_acl_entry##*:}"
+            [ "$windows_acl_count" = 1 ] \
+                && [ "$actual_account" = "$expected_account" ] \
+                && [ "$actual_permissions" = '(R,W)' ] \
+                && ok "Clé d'onboarding : ACL limitée à l'utilisateur Windows" \
+                || no "Clé d'onboarding : ACL Windows inattendue"
+        else
+            onboarding_mode="$(stat -c '%a' "$onboarding_file" 2>/dev/null || true)"
+            [ "$onboarding_mode" = 600 ] \
+                && ok "Clé d'onboarding : fichier présent en mode 0600" \
+                || no "Clé d'onboarding : mode incorrect (${onboarding_mode:-inconnu})"
+        fi
     else
         no 'Clé d’onboarding : fichier absent ou vide'
     fi

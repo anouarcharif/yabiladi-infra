@@ -8,7 +8,7 @@ propre authentification. Le port 9120 du Core est publié uniquement sur
 `127.0.0.1`; l'accès public passe par Traefik en HTTPS. MongoDB et Periphery
 n'ont aucun port publié sur l'hôte.
 
-Traefik conserve le Basic Auth sur l'interface. Seuls `/auth`,
+Traefik conserve le Basic Auth sur l'interface. Seuls `/auth/login/LoginLocalUser`,
 `/read/ListOnboardingKeys`, `/write/CreateOnboardingKey`,
 `/write/UpdateOnboardingKey` et `/ws/periphery` sont routés sans ce middleware :
 Komodo protège les appels de gestion de clé par un JWT admin, et le WebSocket
@@ -33,17 +33,21 @@ l'administration, les journaux et les mesures dans Komodo. Le socket proxy et
 Dozzle ont été supprimés : Dozzle n'apportait plus de fonction requise que
 Komodo ne fournisse déjà.
 
-Periphery communique avec Core en mode sortant depuis Tarourt. Core et Periphery
-se trouvent sur `yabiladi_app` à Imouzzer ; Core est le seul service Komodo
-publié par Traefik. MongoDB n'est pas publié, mais partage ce réseau Docker pour
-la connexion du Core.
+Periphery communique avec Core en mode sortant depuis Tarourt. Il lit la clé
+publique de Core via `PERIPHERY_CORE_PUBLIC_KEYS=file:/config/keys/core.pub`.
+Core et Periphery partagent le volume `komodo_keys` à Imouzzer et en local. À
+Tarourt, la première connexion TLS sortante épingle automatiquement la clé
+publique reçue dans ce volume local. Core est le seul service Komodo publié par
+Traefik. MongoDB n'est pas publié, mais partage ce réseau Docker pour la
+connexion du Core.
 
 Les clés privées d'onboarding sont créées par l'API Core et persistées par nœud
-dans `docker/legacy/komodo-onboarding-<nœud>.key` (mode `0600`, exclu de Git et
-du coffre SOPS). Le script vérifie et réactive leur enregistrement privilégié
-à chaque déploiement. Une clé privilégiée peut mettre à jour la clé publique
-d'un serveur existant ; ces fichiers doivent rester accessibles uniquement au
-déploiement et au conteneur Periphery du même nœud.
+dans `docker/legacy/komodo-onboarding-<nœud>.key` (mode `0600` sur Linux, ACL
+limitée au compte courant sur Windows, exclu de Git et du coffre SOPS). Le script
+vérifie et réactive leur enregistrement privilégié à chaque déploiement. Une
+clé privilégiée peut mettre à jour la clé publique d'un serveur existant ; ces
+fichiers doivent rester accessibles uniquement au déploiement et au conteneur
+Periphery du même nœud.
 
 ## Journaux et mesures
 

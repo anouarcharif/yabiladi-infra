@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -15,6 +16,52 @@ class BootstrapError(Exception):
 
 class CoreUnavailable(BootstrapError):
     pass
+
+
+def restrict_file_permissions(path):
+    if os.name == "nt":
+        try:
+            account = subprocess.run(
+                ["whoami"],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="mbcs",
+                errors="replace",
+            ).stdout.strip()
+            result = subprocess.run(
+                [
+                    "icacls",
+                    str(path),
+                    "/inheritance:r",
+                    "/remove",
+                    "*S-1-1-0",
+                    "*S-1-5-11",
+                    "*S-1-5-32-545",
+                    "*S-1-5-32-546",
+                    "*S-1-5-18",
+                    "*S-1-5-32-544",
+                    "/grant:r",
+                    f"{account}:(R,W)",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="mbcs",
+                errors="replace",
+                check=False,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise BootstrapError(
+                "Impossible de restreindre les permissions Windows de la clé"
+            ) from error
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise BootstrapError(
+                "Impossible de restreindre les permissions Windows de la clé"
+                + (f" : {detail}" if detail else "")
+            )
+    else:
+        os.chmod(path, 0o600)
 
 
 def post_json(address, endpoint, payload, jwt=None):
@@ -66,9 +113,9 @@ def atomic_write(path, contents):
             file.write(contents)
             file.flush()
             os.fsync(file.fileno())
-        os.chmod(temporary, 0o600)
+        restrict_file_permissions(temporary)
         os.replace(temporary, path)
-    except OSError:
+    except (OSError, BootstrapError):
         try:
             os.unlink(temporary)
         except FileNotFoundError:
@@ -112,22 +159,25 @@ def ensure_onboarding_key(
     name,
     key_path,
     public_path,
-    api=post_json,
+    api=None,
 ):
     if not username or not password:
         raise BootstrapError(
             "KOMODO_INIT_ADMIN_USERNAME/PASSWORD requis pour l'amorçage automatique"
         )
 
+    if api is None:
+        def request(endpoint, payload, jwt=None):
+            return post_json(address, endpoint, payload, jwt)
+    else:
+        request = api
+
     deadline = time.monotonic() + 180
     while True:
         try:
-            login = api(
-                "/auth",
-                {
-                    "type": "LoginLocalUser",
-                    "params": {"username": username, "password": password},
-                },
+            login = request(
+                "/auth/login/LoginLocalUser",
+                {"username": username, "password": password},
             )
             break
         except CoreUnavailable:
@@ -137,11 +187,20 @@ def ensure_onboarding_key(
                 ) from None
             time.sleep(5)
 
-    jwt = login.get("jwt") if isinstance(login, dict) else None
+    if isinstance(login, dict) and login.get("type") in ("Passkey", "Totp"):
+        raise BootstrapError(
+            "L'authentification admin exige une étape 2FA non prise en charge par l'amorçage"
+        )
+    jwt_data = login.get("data") if isinstance(login, dict) else None
+    jwt = (
+        jwt_data.get("jwt")
+        if isinstance(jwt_data, dict) and login.get("type") == "Jwt"
+        else None
+    )
     if not isinstance(jwt, str) or not jwt:
         raise BootstrapError("Core n'a pas retourné de JWT admin")
 
-    keys = api("/read/ListOnboardingKeys", {}, jwt)
+    keys = request("/read/ListOnboardingKeys", {}, jwt)
     if not isinstance(keys, list):
         raise BootstrapError("Liste de clés d'onboarding invalide")
     if not all(isinstance(key, dict) for key in keys):
@@ -153,6 +212,7 @@ def ensure_onboarding_key(
         raise BootstrapError("Refus de lire une clé d'onboarding via un lien symbolique")
 
     if key_path.is_file() and public_path.is_file():
+        restrict_file_permissions(key_path)
         private_key = key_path.read_text(encoding="utf-8").strip()
         public_key = public_path.read_text(encoding="utf-8").strip()
         if not private_key or not public_key:
@@ -163,7 +223,7 @@ def ensure_onboarding_key(
         )
         if existing is None:
             new_private_key, new_public_key = create_key(
-                api, jwt, name, private_key
+                request, jwt, name, private_key
             )
             if new_private_key != private_key or new_public_key != public_key:
                 raise BootstrapError(
@@ -177,7 +237,7 @@ def ensure_onboarding_key(
             or not existing.get("privileged")
             or existing.get("expires") != 0
         ):
-            updated = api(
+            updated = request(
                 "/write/UpdateOnboardingKey",
                 {
                     "public_key": public_key,
@@ -199,7 +259,7 @@ def ensure_onboarding_key(
                 )
         return "ready"
 
-    private_key, public_key = create_key(api, jwt, name)
+    private_key, public_key = create_key(request, jwt, name)
     atomic_write(key_path, private_key + "\n")
     atomic_write(public_path, public_key + "\n")
     return "created"

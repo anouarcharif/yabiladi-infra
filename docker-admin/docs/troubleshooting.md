@@ -51,13 +51,19 @@ d'onboarding privilégiée via l'API du Core, avec les identifiants
 matérialisé. Aucune création ni acceptation dans l'interface n'est requise.
 
 La clé privée est stockée sur chaque nœud dans
-`docker/legacy/komodo-onboarding-<nœud>.key` avec le mode `0600`; elle est
-ignorée par Git et n'est pas écrasée par la matérialisation SOPS. Si son entrée
-est révoquée dans Core, le prochain déploiement la réenregistre. Ne pas supprimer
-ces fichiers sur un nœud actif, ni copier leur contenu dans un ticket ou un
-journal. En cas d'échec, vérifier que les identifiants admin sont présents dans
-le secret sans afficher ce fichier, puis consulter les journaux du Core et du
-Periphery.
+`docker/legacy/komodo-onboarding-<nœud>.key` avec le mode `0600` sur Linux ou
+une ACL limitée au compte courant sur Windows; elle est ignorée par Git et
+n'est pas écrasée par la matérialisation SOPS. Si son entrée est révoquée dans
+Core, le prochain déploiement la réenregistre. Ne pas supprimer ces fichiers sur
+un nœud actif, ni copier leur contenu dans un ticket ou un journal.
+
+Periphery lit la clé publique de Core dans `file:/config/keys/core.pub`. Sur
+Tarourt, la première connexion TLS sortante l'épingle automatiquement dans le
+volume local `komodo_keys`. Si les journaux indiquent que la clé publique de
+Core est invalide, vérifier que `PERIPHERY_CORE_PUBLIC_KEYS` pointe vers ce
+fichier, puis relancer `docker-admin/scripts/deploy.sh`. En cas d'échec du
+bootstrap, vérifier que les identifiants admin sont présents dans le secret
+sans afficher ce fichier, puis consulter les journaux du Core et du Periphery.
 
 ## Les mesures ou journaux ne s'actualisent pas
 

@@ -64,7 +64,7 @@ services:
       - "traefik.http.routers.komodo.tls.certresolver=${KOMODO_CERT_RESOLVER-letsencrypt}"
       - "traefik.http.routers.komodo.priority=10"
       - "traefik.http.routers.komodo.middlewares=komodo-htpasswd"
-      - "traefik.http.routers.komodo-bootstrap.rule=(Host(`${KOMODO_HOSTNAME:-komodo-imouzzer.yabiladi.com}`) || Host(`komodo.yabiladi.com`) || Host(`komodo-imouzzer.yabiladi.com`)) && (Path(`/auth`) || Path(`/read/ListOnboardingKeys`) || Path(`/write/CreateOnboardingKey`) || Path(`/write/UpdateOnboardingKey`) || Path(`/ws/periphery`))"
+      - "traefik.http.routers.komodo-bootstrap.rule=(Host(`${KOMODO_HOSTNAME:-komodo-imouzzer.yabiladi.com}`) || Host(`komodo.yabiladi.com`) || Host(`komodo-imouzzer.yabiladi.com`)) && (Path(`/auth/login/LoginLocalUser`) || Path(`/read/ListOnboardingKeys`) || Path(`/write/CreateOnboardingKey`) || Path(`/write/UpdateOnboardingKey`) || Path(`/ws/periphery`))"
       - "traefik.http.routers.komodo-bootstrap.entrypoints=websecure"
       - "traefik.http.routers.komodo-bootstrap.priority=100"
       - "traefik.http.routers.komodo-bootstrap.tls=true"
@@ -90,6 +90,7 @@ services:
       PERIPHERY_CORE_ADDRESS: ${PERIPHERY_CORE_ADDRESS:-}
       PERIPHERY_CONNECT_AS: ${PERIPHERY_CONNECT_AS:-Imouzzer}
       PERIPHERY_ONBOARDING_KEY_FILE: /run/secrets/komodo-onboarding-key
+      PERIPHERY_CORE_PUBLIC_KEYS: file:/config/keys/core.pub
       PERIPHERY_CONTAINER_STATS_POLLING_RATE: "5-sec"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
